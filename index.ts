@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ToolInfo } from "@earendil-works/pi-coding-agent";
 import type { McpExtensionState } from "./state.ts";
 import { Type } from "typebox";
-import { showStatus, showTools, reconnectServers, authenticateServer, openMcpAuthPanel, openMcpPanel, openMcpSetup } from "./commands.ts";
+import { showStatus, showTools, reconnectServers, authenticateServer, logoutServer, openMcpAuthPanel, openMcpPanel, openMcpSetup } from "./commands.ts";
 import { loadMcpConfig } from "./config.ts";
 import { buildProxyDescription, createDirectToolExecutor, getMissingConfiguredDirectToolServers, resolveDirectTools } from "./direct-tools.ts";
 import { flushMetadataCache, initializeMcp, updateStatusBar } from "./init.ts";
@@ -172,6 +172,7 @@ export default function mcpAdapter(pi: ExtensionAPI) {
       const parts = args?.trim()?.split(/\s+/) ?? [];
       const subcommand = parts[0] ?? "";
       const targetServer = parts[1];
+      const rest = parts.slice(1).join(" ");
 
       switch (subcommand) {
         case "reconnect":
@@ -186,6 +187,15 @@ export default function mcpAdapter(pi: ExtensionAPI) {
             await ctx.reload();
             return;
           }
+          break;
+        }
+        case "logout": {
+          const serverName = rest;
+          if (!serverName) {
+            if (ctx.hasUI) ctx.ui.notify("Usage: /mcp logout <server>", "error");
+            return;
+          }
+          await logoutServer(serverName, state, ctx);
           break;
         }
         case "status":

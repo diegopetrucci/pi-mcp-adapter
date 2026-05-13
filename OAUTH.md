@@ -132,6 +132,12 @@ The SDK automatically:
 - Refreshes expired tokens automatically
 - Re-authenticates if tokens are invalid
 
+To clear stored OAuth credentials and force a fresh authorization:
+
+```
+/mcp logout my-oauth-server
+```
+
 ## How It Works
 
 ### Authentication Flow

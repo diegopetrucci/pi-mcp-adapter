@@ -16,7 +16,7 @@ import { lazyConnect, updateMetadataCache, updateStatusBar, getFailureAgeSeconds
 import { loadMetadataCache } from "./metadata-cache.ts";
 import { buildToolMetadata } from "./tool-metadata.ts";
 import { supportsOAuth, authenticate } from "./mcp-auth-flow.ts";
-import { getAuthForUrl } from "./mcp-auth.ts";
+import { clearAllCredentials, getAuthForUrl } from "./mcp-auth.ts";
 import { loadOnboardingState, markSetupCompleted as persistSetupCompleted, markSharedConfigHintShown } from "./onboarding-state.ts";
 import { openPath } from "./utils.ts";
 
@@ -190,6 +190,27 @@ export async function authenticateServer(
   } finally {
     ctx.ui.setStatus("mcp-auth", undefined);
   }
+}
+
+export async function logoutServer(
+  serverName: string,
+  state: McpExtensionState,
+  ctx: ExtensionContext
+): Promise<{ ok: boolean; message: string }> {
+  const definition = state.config.mcpServers[serverName];
+  if (!definition) {
+    const message = `Server "${serverName}" not found in config`;
+    if (ctx.hasUI) ctx.ui.notify(message, "error");
+    return { ok: false, message };
+  }
+
+  clearAllCredentials(serverName);
+  await state.manager.close(serverName);
+  updateStatusBar(state);
+
+  const message = `OAuth credentials cleared for "${serverName}". Run /mcp-auth ${serverName} to authenticate again.`;
+  if (ctx.hasUI) ctx.ui.notify(message, "info");
+  return { ok: true, message };
 }
 
 export interface PanelFlowResult {

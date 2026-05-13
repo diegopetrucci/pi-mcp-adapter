@@ -102,6 +102,28 @@ describe("commands onboarding", () => {
     expect(loadOnboardingState().sharedConfigHintShown).toBe(true);
   });
 
+  it("clears OAuth credentials and closes the server on logout", async () => {
+    process.env.MCP_OAUTH_DIR = mkdtempSync(join(tmpdir(), "pi-mcp-commands-logout-"));
+    const ui = createUi();
+    const close = vi.fn();
+    const { getAuthEntry, updateTokens } = await import("../mcp-auth.ts");
+    const { logoutServer } = await import("../commands.ts");
+
+    updateTokens("oauth-server", { accessToken: "token", refreshToken: "refresh" }, "https://example.com/mcp");
+
+    const result = await logoutServer("oauth-server", {
+      config: { mcpServers: { "oauth-server": { url: "https://example.com/mcp", auth: "oauth" } } },
+      manager: { close },
+      toolMetadata: new Map(),
+      failureTracker: new Map(),
+    } as any, { hasUI: true, ui } as any);
+
+    expect(result.ok).toBe(true);
+    expect(getAuthEntry("oauth-server")).toBeUndefined();
+    expect(close).toHaveBeenCalledWith("oauth-server");
+    expect(ui.notify).toHaveBeenCalledWith(expect.stringContaining("OAuth credentials cleared"), "info");
+  });
+
   it("marks explicit OAuth servers as needs-auth when only stale URL tokens exist", async () => {
     process.env.MCP_OAUTH_DIR = mkdtempSync(join(tmpdir(), "pi-mcp-commands-oauth-"));
     const ui = createUi();
