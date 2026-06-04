@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Rejected non-http/https MCP URL elicitations before prompting or opening a browser.
+- Preserved empty string form values for MCP string elicitations unless schema constraints reject them.
+
 ## [2.8.0] - 2026-05-25
 
 ### Added

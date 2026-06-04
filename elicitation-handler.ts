@@ -128,6 +128,7 @@ export async function handleUrlElicitation(
   options: ElicitationHandlerOptions,
   params: ElicitRequestURLParams,
 ): Promise<ElicitResult> {
+  const browserUrl = getBrowserElicitationUrl(params.url);
   if (!options.autoOpenUrls) {
     const result = await options.ui.form({
       title: "MCP Browser Request",
@@ -136,8 +137,8 @@ export async function handleUrlElicitation(
         "",
         params.message,
         "",
-        `Domain: ${safeUrlHost(params.url)}`,
-        `URL: ${params.url}`,
+        `Domain: ${browserUrl.host}`,
+        `URL: ${browserUrl.toString()}`,
         "",
         "Open this URL in your browser?",
       ].join("\n"),
@@ -150,7 +151,7 @@ export async function handleUrlElicitation(
     if (result.action === "cancel") return { action: "cancel" };
   }
 
-  await open(params.url);
+  await open(browserUrl.toString());
   options.ui.notify("Opened browser for MCP elicitation.", "info");
   return { action: "accept" };
 }
@@ -250,7 +251,7 @@ export function coerceAndValidateFormValues(
 
   for (const [name, schema] of Object.entries(params.requestedSchema.properties)) {
     const raw = values[name] ?? schema.default;
-    if (raw === undefined || raw === "") {
+    if (raw === undefined || (raw === "" && schema.type !== "string")) {
       if (required.has(name)) throw new Error(`Missing required elicitation field: ${name}`);
       continue;
     }
@@ -328,12 +329,12 @@ function humanizeName(name: string): string {
     .replace(/^./, (char) => char.toUpperCase());
 }
 
-function safeUrlHost(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return "unknown";
+function getBrowserElicitationUrl(url: string): URL {
+  const parsed = new URL(url);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`MCP URL elicitation only supports http/https URLs: ${parsed.protocol}`);
   }
+  return parsed;
 }
 
 function stripUndefined(values: Record<string, ExtensionUIFormValue>): Record<string, string | number | boolean | string[]> {

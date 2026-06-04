@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ElicitRequest } from "@modelcontextprotocol/sdk/types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -12,6 +12,10 @@ function formRequest(params: ElicitRequest["params"]): ElicitRequest {
 }
 
 describe("elicitation handler", () => {
+  beforeEach(() => {
+    mocks.open.mockClear();
+  });
+
   it("converts form elicitation schemas to Pi forms and returns accepted content", async () => {
     const { handleElicitationRequest } = await import("../elicitation-handler.ts");
     const ui = {
@@ -138,6 +142,54 @@ describe("elicitation handler", () => {
     expect(mocks.open).toHaveBeenCalledWith("https://checkout.stripe.com/c/pay/cs_test_123");
     expect(ui.notify).toHaveBeenCalledWith("Opened browser for MCP elicitation.", "info");
     expect(result).toEqual({ action: "accept" });
+  });
+
+  it("rejects non-browser URL elicitation schemes before prompting or opening", async () => {
+    const { handleElicitationRequest } = await import("../elicitation-handler.ts");
+    const ui = {
+      form: vi.fn(async () => ({ action: "submit", values: {} })),
+      notify: vi.fn(),
+    };
+
+    await expect(
+      handleElicitationRequest(
+        { serverName: "demo", ui: ui as any, autoOpenUrls: true },
+        formRequest({
+          mode: "url",
+          message: "Open local file",
+          elicitationId: "elicit_file",
+          url: "file:///etc/passwd",
+        }),
+      ),
+    ).rejects.toThrow("MCP URL elicitation only supports http/https URLs: file:");
+
+    expect(ui.form).not.toHaveBeenCalled();
+    expect(mocks.open).not.toHaveBeenCalled();
+    expect(ui.notify).not.toHaveBeenCalled();
+  });
+
+  it("preserves empty strings for string fields unless schema constraints reject them", async () => {
+    const { coerceAndValidateFormValues } = await import("../elicitation-handler.ts");
+    const params = {
+      mode: "form",
+      message: "Collect note",
+      requestedSchema: {
+        type: "object",
+        properties: {
+          note: { type: "string", title: "Note" },
+          summary: { type: "string", title: "Summary", minLength: 1 },
+        },
+        required: ["note"],
+      },
+    } as const;
+
+    expect(coerceAndValidateFormValues(params, { note: "", summary: "ok" })).toEqual({
+      note: "",
+      summary: "ok",
+    });
+    expect(() => coerceAndValidateFormValues(params, { note: "ok", summary: "" })).toThrow(
+      "Elicitation field summary is shorter than minimum length 1",
+    );
   });
 
   it("maps Pi secondary and cancel form actions to MCP decline and cancel", async () => {
