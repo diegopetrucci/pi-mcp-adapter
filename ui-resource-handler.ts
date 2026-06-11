@@ -18,7 +18,7 @@ export class UiResourceHandler {
 
   constructor(private manager: McpServerManager) {}
 
-  async readUiResource(serverName: string, uri: string, signal?: AbortSignal): Promise<UiResourceContent> {
+  async readUiResource(serverName: string, uri: string): Promise<UiResourceContent> {
     const log = this.log.child({ server: serverName, uri });
 
     if (!uri.startsWith("ui://")) {
@@ -29,9 +29,8 @@ export class UiResourceHandler {
 
     let result: ReadResourceResult;
     try {
-      result = await this.manager.readResource(serverName, uri, signal);
+      result = await this.manager.readResource(serverName, uri);
     } catch (error) {
-      // Preserve this typed response so the outer tool adapter can run URL elicitation.
       if (error instanceof UrlElicitationRequiredError) throw error;
       const message = error instanceof Error ? error.message : String(error);
       log.error("Failed to read resource", error instanceof Error ? error : undefined);

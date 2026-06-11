@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { executeCall, executeConnect } from "../proxy-modes.ts";
 
 const mocks = vi.hoisted(() => ({
   authenticate: vi.fn(),
@@ -26,6 +25,7 @@ vi.mock("../init.ts", () => ({
 
 describe("proxy auto auth", () => {
   beforeEach(() => {
+    vi.resetModules();
     mocks.authenticate.mockReset().mockResolvedValue("authenticated");
     mocks.supportsOAuth.mockReset().mockReturnValue(true);
     mocks.lazyConnect.mockReset().mockResolvedValue(false);
@@ -36,6 +36,7 @@ describe("proxy auto auth", () => {
   });
 
   it("auto-authenticates and retries executeConnect once", async () => {
+    const { executeConnect } = await import("../proxy-modes.ts");
 
     let current: any;
     const connected = {
@@ -87,6 +88,7 @@ describe("proxy auto auth", () => {
   });
 
   it("fails fast for non-ui browser auth when autoAuth is enabled", async () => {
+    const { executeConnect } = await import("../proxy-modes.ts");
 
     const manager = {
       connect: vi.fn(async () => ({ status: "needs-auth" })),
@@ -107,13 +109,15 @@ describe("proxy auto auth", () => {
       ui: undefined,
     } as any;
 
-    await expect(executeConnect(state, "demo"))
-      .rejects.toThrow(/\/mcp-auth demo.*interactive session/s);
+    const result = await executeConnect(state, "demo");
 
     expect(mocks.authenticate).not.toHaveBeenCalled();
+    expect(result.content[0].text).toContain("interactive session");
+    expect(result.content[0].text).toContain("/mcp-auth demo");
   });
 
   it("uses custom authRequiredMessage for non-ui autoAuth failures", async () => {
+    const { executeConnect } = await import("../proxy-modes.ts");
 
     const state = {
       config: {
@@ -135,34 +139,53 @@ describe("proxy auto auth", () => {
       ui: undefined,
     } as any;
 
-    await expect(executeConnect(state, "demo"))
-      .rejects.toThrow("Reconnect demo from the host app.");
+    const result = await executeConnect(state, "demo");
 
     expect(mocks.authenticate).not.toHaveBeenCalled();
+    expect(result.content[0].text).toBe("Reconnect demo from the host app.");
   });
 
-  it("throws for MCP isError results so proxy failures are Pi errors", async () => {
+  it("runs URL elicitations returned by proxy tool calls", async () => {
+    const { UrlElicitationRequiredError } = await import("@modelcontextprotocol/sdk/types.js");
+    const { executeCall } = await import("../proxy-modes.ts");
+    const error = new UrlElicitationRequiredError([{
+      mode: "url",
+      message: "Connect your account",
+      elicitationId: "connect-1",
+      url: "https://example.com/connect",
+    }]);
     const connection = {
       status: "connected",
-      client: { callTool: vi.fn(async () => ({ isError: true, content: [{ type: "text", text: "denied" }] })) },
+      client: { callTool: vi.fn().mockRejectedValue(error) },
     };
     const manager = {
-      getConnection: vi.fn(() => connection), touch: vi.fn(), incrementInFlight: vi.fn(), decrementInFlight: vi.fn(),
+      getConnection: vi.fn(() => connection),
+      handleUrlElicitationRequired: vi.fn().mockResolvedValue("accept"),
+      touch: vi.fn(),
+      incrementInFlight: vi.fn(),
+      decrementInFlight: vi.fn(),
     };
     const state = {
       config: { settings: {}, mcpServers: { demo: { command: "demo" } } },
       manager,
       toolMetadata: new Map([["demo", [{
-        name: "demo_search", originalName: "search", description: "Search", inputSchema: { type: "object", properties: {} },
+        name: "demo_search",
+        originalName: "search",
+        description: "Search",
+        inputSchema: { type: "object", properties: {} },
       }]]]),
-      failureTracker: new Map(), completedUiSessions: [],
+      failureTracker: new Map(),
+      completedUiSessions: [],
     } as any;
-    mocks.lazyConnect.mockResolvedValue(true);
 
-    await expect(executeCall(state, "demo_search", {}, "demo")).rejects.toThrow(/denied/);
+    const result = await executeCall(state, "demo_search", {}, "demo");
+
+    expect(manager.handleUrlElicitationRequired).toHaveBeenCalledWith("demo", error);
+    expect(result.details).toMatchObject({ error: "url_elicitation_required", action: "accept" });
   });
 
   it("auto-authenticates and retries executeCall once", async () => {
+    const { executeCall } = await import("../proxy-modes.ts");
 
     let current: any = { status: "needs-auth" };
     const connected = {
@@ -217,14 +240,8 @@ describe("proxy auto auth", () => {
       completedUiSessions: [],
     } as any;
 
-    const signal = new AbortController().signal;
-    const result = await executeCall(state, "demo_search", { q: "hello" }, "demo", undefined, signal);
+    const result = await executeCall(state, "demo_search", { q: "hello" }, "demo");
 
-    expect(connected.client.callTool).toHaveBeenCalledWith(
-      { name: "search", arguments: { q: "hello" }, _meta: undefined },
-      undefined,
-      { signal },
-    );
     expect(mocks.authenticate).toHaveBeenCalledWith(
       "demo",
       "https://api.example.com/mcp",

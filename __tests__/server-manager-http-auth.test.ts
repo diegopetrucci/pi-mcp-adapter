@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { McpServerManager } from "../server-manager.ts";
 
 type OAuthProviderLike = {
   redirectUrl?: string;
@@ -81,6 +80,7 @@ describe("McpServerManager HTTP bearer auth", () => {
   });
 
   it("interpolates ${VAR} bearerToken placeholders", async () => {
+    const { McpServerManager } = await import("../server-manager.ts");
     process.env.MCP_TEST_BEARER_TOKEN = "placeholder-token";
 
     const manager = new McpServerManager();
@@ -94,6 +94,7 @@ describe("McpServerManager HTTP bearer auth", () => {
   });
 
   it("interpolates $env:VAR bearerToken placeholders", async () => {
+    const { McpServerManager } = await import("../server-manager.ts");
     process.env.MCP_TEST_BEARER_TOKEN = "env-prefix-token";
 
     const manager = new McpServerManager();
@@ -107,6 +108,7 @@ describe("McpServerManager HTTP bearer auth", () => {
   });
 
   it("keeps bearerTokenEnv support", async () => {
+    const { McpServerManager } = await import("../server-manager.ts");
     process.env.MCP_TEST_BEARER_TOKEN_ENV = "named-env-token";
 
     const manager = new McpServerManager();
@@ -120,6 +122,7 @@ describe("McpServerManager HTTP bearer auth", () => {
   });
 
   it("preserves OAuth redirect URI and client metadata for HTTP transports", async () => {
+    const { McpServerManager } = await import("../server-manager.ts");
 
     const manager = new McpServerManager();
     await manager.connect("remote", {

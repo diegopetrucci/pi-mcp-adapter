@@ -90,7 +90,6 @@ async function openInBrowser(state: McpExtensionState, url: string): Promise<voi
 export async function maybeStartUiSession(
   state: McpExtensionState,
   request: UiSessionRequest,
-  signal?: AbortSignal,
 ): Promise<UiSessionRuntime | null> {
   const log = logger.child({
     component: "UiSession",
@@ -171,7 +170,7 @@ export async function maybeStartUiSession(
       };
     }
 
-    const resource = await state.uiResourceHandler.readUiResource(request.serverName, request.uiResourceUri, signal);
+    const resource = await state.uiResourceHandler.readUiResource(request.serverName, request.uiResourceUri);
 
     if (state.uiServer) {
       state.uiServer.close("replaced");
@@ -374,9 +373,7 @@ export async function maybeStartUiSession(
       },
     };
   } catch (error) {
-    if (error instanceof UrlElicitationRequiredError || signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
-      throw error;
-    }
+    if (error instanceof UrlElicitationRequiredError) throw error;
     const message = error instanceof Error ? error.message : String(error);
     log.error("Failed to start UI session", error instanceof Error ? error : undefined);
     state.ui?.notify(

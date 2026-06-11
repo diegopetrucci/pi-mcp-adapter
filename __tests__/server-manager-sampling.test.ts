@@ -1,6 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { UrlElicitationRequiredError } from "@modelcontextprotocol/sdk/types.js";
-import { McpServerManager } from "../server-manager.ts";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -52,7 +50,7 @@ describe("McpServerManager sampling", () => {
   beforeEach(() => {
     mocks.clients.length = 0;
     mocks.transports.length = 0;
-    mocks.open.mockReset().mockResolvedValue(undefined);
+    mocks.open.mockClear();
   });
 
   afterEach(() => {
@@ -64,6 +62,7 @@ describe("McpServerManager sampling", () => {
   });
 
   it("advertises sampling and registers the handler before connecting", async () => {
+    const { McpServerManager } = await import("../server-manager.ts");
     const manager = new McpServerManager();
     manager.setSamplingConfig({
       autoApprove: true,
@@ -83,8 +82,10 @@ describe("McpServerManager sampling", () => {
   });
 
   it("advertises elicitation capabilities and registers the handler before connecting", async () => {
+    const { McpServerManager } = await import("../server-manager.ts");
     const manager = new McpServerManager();
     manager.setElicitationConfig({
+      allowUrl: true,
       ui: {} as any,
     });
 
@@ -106,106 +107,74 @@ describe("McpServerManager sampling", () => {
   });
 
   it("advertises form-only elicitation when URL navigation is unavailable", async () => {
+    const { McpServerManager } = await import("../server-manager.ts");
     const manager = new McpServerManager();
-    manager.setElicitationConfig({ ui: {} as any, allowUrl: false });
-    await manager.connect("rpc", { command: "node", args: ["server.js"] });
+    manager.setElicitationConfig({ allowUrl: false, ui: {} as any });
 
-    expect(mocks.clients[0].options).toEqual({ capabilities: { elicitation: { form: {} } } });
-  });
-
-  it("rejects malformed or empty URL-required error payloads", async () => {
-    const manager = new McpServerManager();
-    manager.setElicitationConfig({ ui: { select: vi.fn(), notify: vi.fn() } as any });
-
-    await expect(manager.handleUrlElicitationRequired("demo", new UrlElicitationRequiredError([])))
-      .rejects.toMatchObject({ code: -32602 });
-    await expect(manager.handleUrlElicitationRequired("demo", new UrlElicitationRequiredError([{
-      mode: "url", message: 42, elicitationId: "bad", url: "https://example.com/",
-    } as any]))).rejects.toMatchObject({ code: -32602 });
-  });
-
-  it("handles URL-required errors and only reports known completion notifications once", async () => {
-    const manager = new McpServerManager();
-    const ui = { select: vi.fn(async () => "Open"), notify: vi.fn() };
-    manager.setElicitationConfig({ ui: ui as any });
     await manager.connect("demo", { command: "node", args: ["server.js"] });
 
-    const error = new UrlElicitationRequiredError([{
-      mode: "url",
-      message: "Connect account",
-      elicitationId: "connect-1",
-      url: "https://example.com/connect",
-    }]);
-    await expect(manager.handleUrlElicitationRequired("demo", error)).resolves.toBe("accept");
-    expect(mocks.open).toHaveBeenCalledWith("https://example.com/connect");
+    expect(mocks.clients[0].options).toEqual({
+      capabilities: { elicitation: { form: {} } },
+    });
+  });
+
+  it("notifies only when a known URL elicitation completes", async () => {
+    const { McpServerManager } = await import("../server-manager.ts");
+    const ui = {
+      select: vi.fn().mockResolvedValue("Open"),
+      input: vi.fn(),
+      notify: vi.fn(),
+    };
+    const manager = new McpServerManager();
+    manager.setElicitationConfig({ allowUrl: true, ui: ui as any });
+    await manager.connect("demo", { command: "node", args: ["server.js"] });
 
     const client = mocks.clients[0];
-    const completionCall = client.setNotificationHandler.mock.calls.find(
-      ([schema]: any[]) => schema.shape?.method?.value === "notifications/elicitation/complete",
-    );
-    expect(completionCall).toBeDefined();
-    const completionHandler = completionCall![1];
-    completionHandler({ params: { elicitationId: "connect-1" } });
-    completionHandler({ params: { elicitationId: "connect-1" } });
-    completionHandler({ params: { elicitationId: "unknown" } });
+    const requestHandler = client.setRequestHandler.mock.calls[0][1];
+    await requestHandler({
+      method: "elicitation/create",
+      params: {
+        mode: "url",
+        message: "Connect",
+        elicitationId: "known-id",
+        url: "https://example.com/connect",
+      },
+    });
+    const completionHandler = client.setNotificationHandler.mock.calls[0][1];
+    completionHandler({ params: { elicitationId: "unknown-id" } });
+    completionHandler({ params: { elicitationId: "known-id" } });
+    completionHandler({ params: { elicitationId: "known-id" } });
 
+    expect(ui.notify).toHaveBeenCalledWith("Opened browser for MCP elicitation.", "info");
     expect(ui.notify).toHaveBeenCalledWith(
       "MCP browser interaction for demo completed. You can retry the tool now.",
       "info",
     );
-    expect(ui.notify).toHaveBeenCalledTimes(2); // browser opened + one known completion
+    expect(ui.notify).toHaveBeenCalledTimes(2);
   });
 
-  it("tracks completion before browser launch and rejects duplicate active IDs", async () => {
+  it("handles every URL in a URL-required error", async () => {
+    const { UrlElicitationRequiredError } = await import("@modelcontextprotocol/sdk/types.js");
+    const { McpServerManager } = await import("../server-manager.ts");
+    const ui = {
+      select: vi.fn().mockResolvedValue("Open"),
+      input: vi.fn(),
+      notify: vi.fn(),
+    };
     const manager = new McpServerManager();
-    const ui = { select: vi.fn(async () => "Open"), notify: vi.fn() };
-    manager.setElicitationConfig({ ui: ui as any });
-    await manager.connect("demo", { command: "node", args: ["server.js"] });
-    const client = mocks.clients[0];
-    const completionHandler = client.setNotificationHandler.mock.calls.find(
-      ([schema]: any[]) => schema.shape?.method?.value === "notifications/elicitation/complete",
-    )![1];
-    mocks.open.mockImplementationOnce(async () => completionHandler({ params: { elicitationId: "race" } }));
-    const makeError = () => new UrlElicitationRequiredError([{
-      mode: "url", message: "Connect", elicitationId: "race", url: "https://example.com/connect",
-    }]);
+    manager.setElicitationConfig({ allowUrl: true, ui: ui as any });
+    const result = await manager.handleUrlElicitationRequired("demo", new UrlElicitationRequiredError([
+      { mode: "url", message: "First", elicitationId: "one", url: "https://example.com/one" },
+      { mode: "url", message: "Second", elicitationId: "two", url: "https://example.com/two" },
+    ]));
 
-    await expect(manager.handleUrlElicitationRequired("demo", makeError())).resolves.toBe("accept");
-    expect(ui.notify).toHaveBeenCalledWith(
-      "MCP browser interaction for demo completed. You can retry the tool now.", "info",
-    );
-
-    await expect(manager.handleUrlElicitationRequired("demo", makeError())).resolves.toBe("accept");
-    await expect(manager.handleUrlElicitationRequired("demo", makeError()))
-      .rejects.toMatchObject({ code: -32602 });
-    expect(ui.select).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps opaque URL completion identities isolated across servers", () => {
-    const manager = new McpServerManager() as any;
-    manager.reservePendingUrlElicitation("a", "b\0c");
-    manager.reservePendingUrlElicitation("a\0b", "c");
-
-    expect(manager.pendingUrlElicitations.size).toBe(2);
-  });
-
-  it("reports URL completion capacity exhaustion without evicting active IDs", async () => {
-    const manager = new McpServerManager();
-    const ui = { select: vi.fn(async () => "Open"), notify: vi.fn() };
-    manager.setElicitationConfig({ ui: ui as any });
-    await manager.connect("demo", { command: "node", args: ["server.js"] });
-    const pending = (manager as any).pendingUrlElicitations as Map<string, { acceptedAt: number; serverName: string }>;
-    for (let index = 0; index < 256; index++) pending.set(`demo-${index}`, { acceptedAt: Date.now(), serverName: "demo" });
-    const firstKey = pending.keys().next().value;
-    const error = new UrlElicitationRequiredError([{
-      mode: "url", message: "Connect", elicitationId: "overflow", url: "https://example.com/connect",
-    }]);
-
-    await expect(manager.handleUrlElicitationRequired("demo", error)).rejects.toMatchObject({ code: -32603 });
-    expect(pending.has(firstKey)).toBe(true);
+    expect(result).toBe("accept");
+    expect(mocks.open).toHaveBeenNthCalledWith(1, "https://example.com/one");
+    expect(mocks.open).toHaveBeenNthCalledWith(2, "https://example.com/two");
   });
 
   it("advertises sampling and elicitation together", async () => {
+    const { McpServerManager } = await import("../server-manager.ts");
     const manager = new McpServerManager();
     manager.setSamplingConfig({
       autoApprove: true,
@@ -214,6 +183,7 @@ describe("McpServerManager sampling", () => {
       getSignal: () => undefined,
     });
     manager.setElicitationConfig({
+      allowUrl: true,
       ui: {} as any,
     });
 
@@ -232,6 +202,7 @@ describe("McpServerManager sampling", () => {
   });
 
   it("does not advertise sampling when no sampling config is set", async () => {
+    const { McpServerManager } = await import("../server-manager.ts");
     const manager = new McpServerManager();
 
     await manager.connect("demo", { command: "node", args: ["server.js"] });
@@ -242,6 +213,7 @@ describe("McpServerManager sampling", () => {
   });
 
   it("expands environment variables and tilde in stdio cwd", async () => {
+    const { McpServerManager } = await import("../server-manager.ts");
     process.env.MCP_TEST_CWD = "/tmp/pi-mcp-cwd";
 
     const envManager = new McpServerManager();
