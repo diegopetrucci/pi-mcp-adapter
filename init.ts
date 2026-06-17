@@ -285,8 +285,11 @@ export function updateStatusBar(state: McpExtensionState): void {
     ui.setStatus("mcp", undefined);
     return;
   }
-  const connectedCount = state.manager.getAllConnections().size;
-  ui.setStatus("mcp", ui.theme.fg("accent", `MCP: ${connectedCount}/${total} servers`));
+  const connected = [...state.manager.getAllConnections().entries()]
+    .filter(([, c]) => c.status === "connected");
+  const connectedCount = connected.length;
+  const names = connectedCount > 0 ? `, ${connected.map(([n]) => n).join(", ")}` : "";
+  ui.setStatus("mcp", ui.theme.fg("dim", `MCP: ${connectedCount}/${total} servers${names}`));
 }
 
 export function getFailureAgeSeconds(state: McpExtensionState, serverName: string): number | null {
