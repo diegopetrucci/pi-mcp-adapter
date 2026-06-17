@@ -285,9 +285,10 @@ export function updateStatusBar(state: McpExtensionState): void {
     ui.setStatus("mcp", undefined);
     return;
   }
-  const connections = state.manager.getAllConnections();
-  const connectedCount = connections.size;
-  const names = connectedCount > 0 ? `, ${[...connections.keys()].join(", ")}` : "";
+  const connected = [...state.manager.getAllConnections().entries()]
+    .filter(([, c]) => c.status === "connected");
+  const connectedCount = connected.length;
+  const names = connectedCount > 0 ? `, ${connected.map(([n]) => n).join(", ")}` : "";
   ui.setStatus("mcp", ui.theme.fg("dim", `MCP: ${connectedCount}/${total} servers${names}`));
 }
 
