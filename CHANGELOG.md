@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.1] - 2026-06-29
+
+### Changed
+- Published the tlh-maintained fork as the scoped npm package `@diegopetrucci/pi-mcp-adapter@2.10.1`, with the exact pinned install command `pi install npm:@diegopetrucci/pi-mcp-adapter@2.10.1` documented for tlh release handoff.
+
 ## [2.10.0] - 2026-06-13
 
 ### Added

@@ -15,6 +15,7 @@ describe("cli init helper", () => {
 
   beforeEach(() => {
     vi.resetModules();
+    delete process.env.PI_CODING_AGENT_DIR;
   });
 
   afterEach(() => {
