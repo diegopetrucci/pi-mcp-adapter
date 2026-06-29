@@ -19,8 +19,10 @@ But the MCP ecosystem has useful stuff - databases, browsers, APIs. This adapter
 ## Install
 
 ```bash
-pi install npm:pi-mcp-adapter
+pi install npm:@diegopetrucci/pi-mcp-adapter@2.10.1
 ```
+
+TLH automation should use this exact pinned install target.
 
 Restart Pi after installation.
 

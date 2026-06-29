@@ -1,6 +1,6 @@
 {
-  "name": "pi-mcp-adapter",
-  "version": "2.10.0",
+  "name": "@diegopetrucci/pi-mcp-adapter",
+  "version": "2.10.1",
   "description": "MCP (Model Context Protocol) adapter extension for Pi coding agent",
   "type": "module",
   "license": "MIT",
@@ -16,7 +16,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/nicobailon/pi-mcp-adapter.git"
+    "url": "git+https://github.com/diegopetrucci/pi-mcp-adapter.git"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "keywords": [
     "pi-package",
@@ -33,7 +36,7 @@
     "extensions": [
       "./index.ts"
     ],
-    "video": "https://github.com/nicobailon/pi-mcp-adapter/raw/refs/heads/main/pi-mcp.mp4"
+    "video": "https://github.com/diegopetrucci/pi-mcp-adapter/raw/refs/heads/main/pi-mcp.mp4"
   },
   "files": [
     "cli.js",

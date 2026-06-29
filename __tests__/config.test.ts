@@ -10,14 +10,21 @@ function writeJson(path: string, value: unknown): void {
 
 describe("config discovery", () => {
   const originalHome = process.env.HOME;
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
   const originalCwd = process.cwd();
 
   beforeEach(() => {
     vi.resetModules();
+    delete process.env.PI_CODING_AGENT_DIR;
   });
 
   afterEach(() => {
     process.env.HOME = originalHome;
+    if (originalAgentDir === undefined) {
+      delete process.env.PI_CODING_AGENT_DIR;
+    } else {
+      process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+    }
     process.chdir(originalCwd);
   });
 
