@@ -4,6 +4,8 @@
 
 # Pi MCP Adapter
 
+> TLH fork note: this fork is maintained for **The Last Harness (tlh)**, where tlh automation bundles and pins it for compatibility. It is not intended as a general standalone distribution target outside that TLH use.
+
 Use MCP servers with [Pi](https://github.com/badlogic/pi-mono/) without burning your context window.
 
 https://github.com/user-attachments/assets/4b7c66ff-e27e-4639-b195-22c3db406a5a
@@ -22,7 +24,7 @@ But the MCP ecosystem has useful stuff - databases, browsers, APIs. This adapter
 pi install npm:@diegopetrucci/pi-mcp-adapter@2.10.1
 ```
 
-TLH automation should use this exact pinned install target.
+TLH automation should use this exact pinned install target. This fork's published package exists to support that bundled tlh integration rather than serve as a general-purpose standalone release channel.
 
 Restart Pi after installation.
 
