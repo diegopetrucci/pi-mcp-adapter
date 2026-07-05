@@ -5,7 +5,8 @@
 - This repository is the `pi-mcp-adapter` fork maintained for **The Last Harness (tlh)**: https://github.com/diegopetrucci/the-last-harness
 - Fork origin: `diegopetrucci/pi-mcp-adapter`
 - Upstream source of truth: `nicobailon/pi-mcp-adapter`
-- Purpose: maintain a reviewable fork of the Pi MCP adapter while preserving upstream compatibility unless an approved fork delta is required.
+- Purpose: maintain a reviewable fork of the Pi MCP adapter for tlh automation while preserving upstream compatibility unless an approved fork delta is required.
+- Distribution stance: this fork is bundled/pinned for The Last Harness use and is not intended as a general standalone distribution target outside that tlh workflow.
 
 ## Fork sync policy
 
