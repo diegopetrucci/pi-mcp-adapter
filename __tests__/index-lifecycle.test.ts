@@ -1,113 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({
-  initializeMcp: vi.fn(),
-  updateStatusBar: vi.fn(),
-  flushMetadataCache: vi.fn(),
-  initializeOAuth: vi.fn().mockResolvedValue(undefined),
-  shutdownOAuth: vi.fn().mockResolvedValue(undefined),
-  loadMcpConfig: vi.fn(() => ({ mcpServers: {} })),
-  loadMetadataCache: vi.fn(() => null),
-  buildProxyDescription: vi.fn(() => "MCP gateway"),
-  createDirectToolExecutor: vi.fn(() => vi.fn()),
-  getMissingConfiguredDirectToolServers: vi.fn(() => []),
-  resolveDirectTools: vi.fn(() => []),
-  showStatus: vi.fn(),
-  showTools: vi.fn(),
-  reconnectServers: vi.fn(),
-  authenticateServer: vi.fn(),
-  logoutServer: vi.fn(),
-  openMcpAuthPanel: vi.fn(),
-  openMcpPanel: vi.fn(),
-  openMcpSetup: vi.fn(),
-  executeAuthComplete: vi.fn(),
-  executeAuthStart: vi.fn(),
-  executeCall: vi.fn(),
-  executeConnect: vi.fn(),
-  executeDescribe: vi.fn(),
-  executeList: vi.fn(),
-  executeSearch: vi.fn(),
-  executeStatus: vi.fn(),
-  executeUiMessages: vi.fn(),
-  getConfigPathFromArgv: vi.fn(() => undefined),
-  truncateAtWord: vi.fn((text: string) => text),
-}));
-
-vi.mock("../init.ts", () => ({
-  initializeMcp: mocks.initializeMcp,
-  updateStatusBar: mocks.updateStatusBar,
-  flushMetadataCache: mocks.flushMetadataCache,
-}));
-
-vi.mock("../mcp-auth-flow.ts", () => ({
-  initializeOAuth: mocks.initializeOAuth,
-  shutdownOAuth: mocks.shutdownOAuth,
-}));
-
-vi.mock("../config.ts", () => ({
-  loadMcpConfig: mocks.loadMcpConfig,
-}));
-
-vi.mock("../metadata-cache.ts", () => ({
-  loadMetadataCache: mocks.loadMetadataCache,
-}));
-
-vi.mock("../direct-tools.ts", () => ({
-  buildProxyDescription: mocks.buildProxyDescription,
-  createDirectToolExecutor: mocks.createDirectToolExecutor,
-  getMissingConfiguredDirectToolServers: mocks.getMissingConfiguredDirectToolServers,
-  resolveDirectTools: mocks.resolveDirectTools,
-}));
-
-vi.mock("../commands.ts", () => ({
-  showStatus: mocks.showStatus,
-  showTools: mocks.showTools,
-  reconnectServers: mocks.reconnectServers,
-  authenticateServer: mocks.authenticateServer,
-  logoutServer: mocks.logoutServer,
-  openMcpAuthPanel: mocks.openMcpAuthPanel,
-  openMcpPanel: mocks.openMcpPanel,
-  openMcpSetup: mocks.openMcpSetup,
-}));
-
-vi.mock("../proxy-modes.ts", () => ({
-  executeAuthComplete: mocks.executeAuthComplete,
-  executeAuthStart: mocks.executeAuthStart,
-  executeCall: mocks.executeCall,
-  executeConnect: mocks.executeConnect,
-  executeDescribe: mocks.executeDescribe,
-  executeList: mocks.executeList,
-  executeSearch: mocks.executeSearch,
-  executeStatus: mocks.executeStatus,
-  executeUiMessages: mocks.executeUiMessages,
-}));
-
-vi.mock("../utils.ts", () => ({
-  getConfigPathFromArgv: mocks.getConfigPathFromArgv,
-  truncateAtWord: mocks.truncateAtWord,
-}));
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
     resolve = res;
+    reject = rej;
   });
-  return { promise, resolve };
-}
-
-function createState() {
-  return {
-    manager: { getAllConnections: () => new Map() },
-    lifecycle: { gracefulShutdown: vi.fn().mockResolvedValue(undefined) },
-    toolMetadata: new Map(),
-    config: { mcpServers: {} },
-    failureTracker: new Map(),
-    uiResourceHandler: {},
-    consentManager: {},
-    uiServer: null,
-    completedUiSessions: [],
-    openBrowser: vi.fn(),
-  } as any;
+  return { promise, resolve, reject };
 }
 
 function createPi() {
@@ -126,31 +26,27 @@ function createPi() {
   };
 }
 
-describe("mcpAdapter session lifecycle", () => {
+async function importFacade() {
+  const mod = await import("../index.ts");
+  return mod.default;
+}
+
+describe("index facade lifecycle", () => {
   const originalDirectTools = process.env.MCP_DIRECT_TOOLS;
 
   beforeEach(() => {
-    delete process.env.MCP_DIRECT_TOOLS;
     vi.resetModules();
-    for (const value of Object.values(mocks)) {
-      if (typeof value === "function" && "mockReset" in value) {
-        value.mockReset();
-      }
-    }
-
-    mocks.initializeOAuth.mockResolvedValue(undefined);
-    mocks.shutdownOAuth.mockResolvedValue(undefined);
-    mocks.loadMcpConfig.mockReturnValue({ mcpServers: {} });
-    mocks.loadMetadataCache.mockReturnValue(null);
-    mocks.buildProxyDescription.mockReturnValue("MCP gateway");
-    mocks.createDirectToolExecutor.mockReturnValue(vi.fn());
-    mocks.getMissingConfiguredDirectToolServers.mockReturnValue([]);
-    mocks.resolveDirectTools.mockReturnValue([]);
-    mocks.getConfigPathFromArgv.mockReturnValue(undefined);
-    mocks.truncateAtWord.mockImplementation((text: string) => text);
+    delete process.env.MCP_DIRECT_TOOLS;
   });
 
   afterEach(() => {
+    vi.clearAllMocks();
+    vi.unmock("../mcp-runtime.ts");
+    vi.unmock("../commands.ts");
+    vi.unmock("../init.ts");
+    vi.unmock("../proxy-modes.ts");
+    vi.unmock("../direct-tools.ts");
+    vi.unmock("../mcp-auth-flow.ts");
     if (originalDirectTools === undefined) {
       delete process.env.MCP_DIRECT_TOOLS;
     } else {
@@ -158,327 +54,535 @@ describe("mcpAdapter session lifecycle", () => {
     }
   });
 
-  it("keeps the proxy tool when direct tools are still missing from cache", async () => {
-    mocks.loadMcpConfig.mockReturnValue({
-      mcpServers: {
-        demo: { command: "npx", args: ["-y", "demo-server"], directTools: true },
-      },
-      settings: { disableProxyTool: true },
-    });
-    mocks.resolveDirectTools.mockReturnValue([
-      {
-        serverName: "demo",
-        originalName: "search",
-        prefixedName: "demo_search",
-        description: "Search demo",
-      },
-    ]);
-    mocks.getMissingConfiguredDirectToolServers.mockReturnValue(["demo"]);
+  function mockCommonModules({
+    config = { mcpServers: {} },
+    cache = { servers: {} },
+    missingConfiguredDirectToolServers = [],
+    directSpecs = [{
+      serverName: "demo",
+      originalName: "search",
+      prefixedName: "demo_search",
+      description: "Search demo",
+    }],
+    loadMcpConfigImpl,
+    loadMetadataCacheImpl,
+    getMissingConfiguredDirectToolServersImpl,
+  }: {
+    config?: any;
+    cache?: any;
+    missingConfiguredDirectToolServers?: string[];
+    directSpecs?: any[];
+    loadMcpConfigImpl?: (...args: any[]) => any;
+    loadMetadataCacheImpl?: (...args: any[]) => any;
+    getMissingConfiguredDirectToolServersImpl?: (...args: any[]) => any;
+  } = {}) {
+    const loadMcpConfig = vi.fn(loadMcpConfigImpl ?? (() => config));
+    const loadMetadataCache = vi.fn(loadMetadataCacheImpl ?? (() => cache));
+    const getMissingConfiguredDirectToolServers = vi.fn(
+      getMissingConfiguredDirectToolServersImpl ?? (() => missingConfiguredDirectToolServers),
+    );
 
-    const { default: mcpAdapter } = await import("../index.ts");
+    vi.doMock("../config.ts", () => ({
+      loadMcpConfig,
+    }));
+    vi.doMock("../metadata-cache.ts", () => ({
+      loadMetadataCache,
+    }));
+    vi.doMock("../startup-mcp-facade.ts", () => ({
+      buildProxyDescription: vi.fn(() => "MCP gateway"),
+      createMcpDirectToolCallRenderer: vi.fn(() => vi.fn()),
+      getDirectToolParametersSchema: vi.fn(() => ({ type: "object", properties: {} })),
+      getMissingConfiguredDirectToolServers,
+      MCP_PROXY_TOOL_PARAMETERS_SCHEMA: { type: "object", properties: {} },
+      renderMcpProxyToolCall: vi.fn(),
+      renderMcpToolResult: vi.fn(),
+      resolveDirectTools: vi.fn(() => directSpecs),
+    }));
+    vi.doMock("../utils.ts", () => ({
+      getConfigPathFromArgv: vi.fn(() => "/tmp/custom-mcp.json"),
+      truncateAtWord: vi.fn((text: string) => text),
+    }));
+
+    return {
+      loadMcpConfig,
+      loadMetadataCache,
+      getMissingConfiguredDirectToolServers,
+    };
+  }
+
+  it("registers commands and tools without statically importing the heavy runtime graph", async () => {
+    const imported = {
+      runtime: false,
+      commands: false,
+      init: false,
+      proxyModes: false,
+      directTools: false,
+      authFlow: false,
+    };
+
+    vi.doMock("../commands.ts", () => {
+      imported.commands = true;
+      return {};
+    });
+    vi.doMock("../init.ts", () => {
+      imported.init = true;
+      return {};
+    });
+    vi.doMock("../proxy-modes.ts", () => {
+      imported.proxyModes = true;
+      return {};
+    });
+    vi.doMock("../direct-tools.ts", () => {
+      imported.directTools = true;
+      return {};
+    });
+    vi.doMock("../mcp-auth-flow.ts", () => {
+      imported.authFlow = true;
+      return {};
+    });
+    vi.doMock("../mcp-runtime.ts", () => {
+      imported.runtime = true;
+      return {
+        createMcpRuntime: vi.fn(() => ({
+          handleSessionStart: vi.fn(),
+          handleSessionShutdown: vi.fn(),
+          handleMcpCommand: vi.fn(),
+          handleMcpAuthCommand: vi.fn(),
+          executeProxyTool: vi.fn(),
+          executeDirectTool: vi.fn(),
+        })),
+      };
+    });
+    mockCommonModules({
+      config: {
+        mcpServers: {
+          demo: { command: "npx", args: ["-y", "demo-server"], directTools: true, lifecycle: "lazy" },
+        },
+      },
+      missingConfiguredDirectToolServers: ["demo"],
+    });
+
+    const mcpAdapter = await importFacade();
     const { api } = createPi();
     mcpAdapter(api);
 
-    expect(api.registerTool).toHaveBeenCalledWith(expect.objectContaining({
-      name: "demo_search",
-      renderResult: expect.any(Function),
-    }));
-    expect(api.registerTool).toHaveBeenCalledWith(expect.objectContaining({
-      name: "mcp",
-      renderResult: expect.any(Function),
-    }));
-  });
-
-  it("skips the proxy tool once direct tools are fully available", async () => {
-    mocks.loadMcpConfig.mockReturnValue({
-      mcpServers: {
-        demo: { command: "npx", args: ["-y", "demo-server"], directTools: true },
-      },
-      settings: { disableProxyTool: true },
+    expect(api.registerFlag).toHaveBeenCalledWith("mcp-config", expect.any(Object));
+    expect(api.registerCommand).toHaveBeenCalledWith("mcp", expect.any(Object));
+    expect(api.registerCommand).toHaveBeenCalledWith("mcp-auth", expect.any(Object));
+    expect(api.registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: "demo_search" }));
+    expect(api.registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: "mcp" }));
+    expect(imported).toEqual({
+      runtime: false,
+      commands: false,
+      init: false,
+      proxyModes: false,
+      directTools: false,
+      authFlow: false,
     });
-    mocks.resolveDirectTools.mockReturnValue([
-      {
-        serverName: "demo",
-        originalName: "search",
-        prefixedName: "demo_search",
-        description: "Search demo",
-      },
-    ]);
-
-    const { default: mcpAdapter } = await import("../index.ts");
-    const { api } = createPi();
-    mcpAdapter(api);
-
-    expect(api.registerTool).toHaveBeenCalledWith(expect.objectContaining({
-      name: "demo_search",
-      renderResult: expect.any(Function),
-    }));
-    expect(api.registerTool).not.toHaveBeenCalledWith(expect.objectContaining({ name: "mcp" }));
   });
 
-  it("routes manual auth actions through the proxy tool", async () => {
-    const state = createState();
-    mocks.initializeMcp.mockResolvedValue(state);
-    mocks.executeAuthStart.mockResolvedValue({ content: [{ type: "text", text: "auth url" }] });
-    mocks.executeAuthComplete.mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
+  it("does not import the runtime on default all-lazy cached session_start and skips shutdown import", async () => {
+    const createMcpRuntime = vi.fn();
+    vi.doMock("../mcp-runtime.ts", () => ({ createMcpRuntime }));
+    mockCommonModules({
+      config: {
+        mcpServers: {
+          demo: { command: "npx", args: ["-y", "demo-server"], lifecycle: "lazy", directTools: true },
+        },
+      },
+    });
 
-    const { default: mcpAdapter } = await import("../index.ts");
+    const mcpAdapter = await importFacade();
     const { api, handlers } = createPi();
     mcpAdapter(api);
 
-    const sessionStart = handlers.get("session_start");
-    await sessionStart?.({}, {});
-    await Promise.resolve();
-    await Promise.resolve();
+    await handlers.get("session_start")?.({ reason: "test" }, { hasUI: false });
+    await handlers.get("session_shutdown")?.();
 
-    const proxyTool = api.registerTool.mock.calls.find((call: any[]) => call[0].name === "mcp")?.[0];
-    expect(proxyTool).toBeDefined();
+    expect(createMcpRuntime).not.toHaveBeenCalled();
+  });
 
-    await proxyTool.execute("call-1", { action: "auth-start", server: "demo" });
-    await proxyTool.execute("call-2", {
-      action: "auth-complete",
-      server: "demo",
-      args: '{"redirectUrl":"http://localhost:19876/callback?code=abc&state=state"}',
+  it.each(["eager", "keep-alive"])("imports and starts the runtime on %s session_start from the session cwd config", async (lifecycle) => {
+    const runtime = {
+      handleSessionStart: vi.fn().mockResolvedValue(undefined),
+      handleSessionShutdown: vi.fn().mockResolvedValue(undefined),
+      handleMcpCommand: vi.fn().mockResolvedValue(undefined),
+      handleMcpAuthCommand: vi.fn().mockResolvedValue(undefined),
+      executeProxyTool: vi.fn().mockResolvedValue({ content: [] }),
+      executeDirectTool: vi.fn().mockResolvedValue({ content: [] }),
+    };
+    const createMcpRuntime = vi.fn(() => runtime);
+    vi.doMock("../mcp-runtime.ts", () => ({ createMcpRuntime }));
+    const { loadMcpConfig } = mockCommonModules({
+      loadMcpConfigImpl: (_overridePath?: string, cwd?: string) => {
+        if (cwd === "/repo/session") {
+          return {
+            mcpServers: {
+              demo: { command: "npx", args: ["-y", "demo-server"], lifecycle },
+            },
+          };
+        }
+
+        return { mcpServers: {} };
+      },
     });
 
-    expect(mocks.executeAuthStart).toHaveBeenCalledWith(state, "demo");
-    expect(mocks.executeAuthComplete).toHaveBeenCalledWith(
-      state,
-      "demo",
-      "http://localhost:19876/callback?code=abc&state=state",
+    const mcpAdapter = await importFacade();
+    const { api, handlers } = createPi();
+    mcpAdapter(api);
+
+    const ctx = { hasUI: false, cwd: "/repo/session" } as any;
+    await handlers.get("session_start")?.({ reason: lifecycle }, ctx);
+
+    expect(loadMcpConfig).toHaveBeenNthCalledWith(1, "/tmp/custom-mcp.json");
+    expect(loadMcpConfig).toHaveBeenNthCalledWith(2, "/tmp/custom-mcp.json", "/repo/session");
+    expect(createMcpRuntime).toHaveBeenCalledWith(api, { earlyConfigPath: "/tmp/custom-mcp.json" });
+    expect(runtime.handleSessionStart).toHaveBeenCalledWith({ reason: lifecycle }, ctx);
+  });
+
+  it("imports and starts the runtime on session_start when session-cwd direct-tool metadata is missing", async () => {
+    const runtime = {
+      handleSessionStart: vi.fn().mockResolvedValue(undefined),
+      handleSessionShutdown: vi.fn().mockResolvedValue(undefined),
+      handleMcpCommand: vi.fn().mockResolvedValue(undefined),
+      handleMcpAuthCommand: vi.fn().mockResolvedValue(undefined),
+      executeProxyTool: vi.fn().mockResolvedValue({ content: [] }),
+      executeDirectTool: vi.fn().mockResolvedValue({ content: [] }),
+    };
+    const createMcpRuntime = vi.fn(() => runtime);
+    vi.doMock("../mcp-runtime.ts", () => ({ createMcpRuntime }));
+    const sessionConfig = {
+      mcpServers: {
+        demo: { command: "npx", args: ["-y", "demo-server"], lifecycle: "lazy", directTools: true },
+      },
+    };
+    const { getMissingConfiguredDirectToolServers } = mockCommonModules({
+      loadMcpConfigImpl: (_overridePath?: string, cwd?: string) => (
+        cwd === "/repo/session" ? sessionConfig : { mcpServers: {} }
+      ),
+      getMissingConfiguredDirectToolServersImpl: (config: any) => (
+        config === sessionConfig ? ["demo"] : []
+      ),
+    });
+
+    const mcpAdapter = await importFacade();
+    const { api, handlers } = createPi();
+    mcpAdapter(api);
+
+    const ctx = { hasUI: false, cwd: "/repo/session" } as any;
+    await handlers.get("session_start")?.({ reason: "cache-miss" }, ctx);
+
+    expect(getMissingConfiguredDirectToolServers).toHaveBeenNthCalledWith(1, { mcpServers: {} }, { servers: {} });
+    expect(getMissingConfiguredDirectToolServers).toHaveBeenNthCalledWith(2, sessionConfig, { servers: {} });
+    expect(createMcpRuntime).toHaveBeenCalledTimes(1);
+    expect(runtime.handleSessionStart).toHaveBeenCalledWith({ reason: "cache-miss" }, ctx);
+  });
+
+  it("does not import the runtime on session_start for session-cwd metadata misses when direct-tool bootstrap is disabled", async () => {
+    process.env.MCP_DIRECT_TOOLS = "__none__";
+
+    const createMcpRuntime = vi.fn();
+    vi.doMock("../mcp-runtime.ts", () => ({ createMcpRuntime }));
+    const sessionConfig = {
+      mcpServers: {
+        demo: { command: "npx", args: ["-y", "demo-server"], lifecycle: "lazy", directTools: true },
+      },
+    };
+    const { getMissingConfiguredDirectToolServers } = mockCommonModules({
+      loadMcpConfigImpl: (_overridePath?: string, cwd?: string) => (
+        cwd === "/repo/session" ? sessionConfig : { mcpServers: {} }
+      ),
+      getMissingConfiguredDirectToolServersImpl: (config: any) => (
+        config === sessionConfig ? ["demo"] : []
+      ),
+    });
+
+    const mcpAdapter = await importFacade();
+    const { api, handlers } = createPi();
+    mcpAdapter(api);
+
+    const ctx = { hasUI: false, cwd: "/repo/session" } as any;
+    await handlers.get("session_start")?.({ reason: "cache-miss" }, ctx);
+
+    expect(getMissingConfiguredDirectToolServers).toHaveBeenNthCalledWith(2, sessionConfig, { servers: {} });
+    expect(createMcpRuntime).not.toHaveBeenCalled();
+    expect(api.registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: "mcp" }));
+  });
+
+  it("initializes on demand using the saved session_start context before routing commands", async () => {
+    const runtime = {
+      handleSessionStart: vi.fn().mockResolvedValue(undefined),
+      handleSessionShutdown: vi.fn().mockResolvedValue(undefined),
+      handleMcpCommand: vi.fn().mockResolvedValue(undefined),
+      handleMcpAuthCommand: vi.fn().mockResolvedValue(undefined),
+      executeProxyTool: vi.fn().mockResolvedValue({ content: [] }),
+      executeDirectTool: vi.fn().mockResolvedValue({ content: [] }),
+    };
+    const createMcpRuntime = vi.fn(() => runtime);
+    vi.doMock("../mcp-runtime.ts", () => ({ createMcpRuntime }));
+    mockCommonModules({
+      config: {
+        mcpServers: {
+          demo: { command: "npx", args: ["-y", "demo-server"], lifecycle: "lazy", directTools: true },
+        },
+      },
+    });
+
+    const mcpAdapter = await importFacade();
+    const { api, handlers } = createPi();
+    mcpAdapter(api);
+
+    const sessionCtx = { hasUI: false, marker: "session" } as any;
+    await handlers.get("session_start")?.({ reason: "saved" }, sessionCtx);
+
+    const mcpCommand = api.registerCommand.mock.calls.find((call: any[]) => call[0] === "mcp")?.[1];
+    const commandCtx = { hasUI: false, marker: "command" } as any;
+    await mcpCommand.handler("status", commandCtx);
+
+    expect(runtime.handleSessionStart).toHaveBeenCalledWith({ reason: "saved" }, sessionCtx);
+    expect(runtime.handleMcpCommand).toHaveBeenCalledWith("status", commandCtx);
+    expect(runtime.handleSessionStart.mock.invocationCallOrder[0]).toBeLessThan(
+      runtime.handleMcpCommand.mock.invocationCallOrder[0],
     );
   });
 
-  it("starts a replacement init immediately and shuts down stale init results", async () => {
-    const first = createDeferred<any>();
-    const second = createDeferred<any>();
-    mocks.initializeMcp
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise);
+  it("reuses the loaded runtime on a second all-lazy session_start without re-importing it", async () => {
+    const runtime = {
+      handleSessionStart: vi.fn().mockResolvedValue(undefined),
+      handleSessionShutdown: vi.fn().mockResolvedValue(undefined),
+      handleMcpCommand: vi.fn().mockResolvedValue(undefined),
+      handleMcpAuthCommand: vi.fn().mockResolvedValue(undefined),
+      executeProxyTool: vi.fn().mockResolvedValue({ content: [] }),
+      executeDirectTool: vi.fn().mockResolvedValue({ content: [] }),
+    };
+    const createMcpRuntime = vi.fn(() => runtime);
+    vi.doMock("../mcp-runtime.ts", () => ({ createMcpRuntime }));
+    mockCommonModules({
+      config: {
+        mcpServers: {
+          demo: { command: "npx", args: ["-y", "demo-server"], lifecycle: "lazy", directTools: true },
+        },
+      },
+    });
 
-    const { default: mcpAdapter } = await import("../index.ts");
+    const mcpAdapter = await importFacade();
     const { api, handlers } = createPi();
     mcpAdapter(api);
 
-    const sessionStart = handlers.get("session_start");
-    expect(sessionStart).toBeTypeOf("function");
+    const firstCtx = { hasUI: false, marker: "first-session" } as any;
+    await handlers.get("session_start")?.({ reason: "saved" }, firstCtx);
 
-    await sessionStart?.({}, {});
-    expect(mocks.initializeMcp).toHaveBeenCalledTimes(1);
-    expect(mocks.shutdownOAuth).toHaveBeenCalledTimes(1);
+    const mcpCommand = api.registerCommand.mock.calls.find((call: any[]) => call[0] === "mcp")?.[1];
+    await mcpCommand.handler("status", { hasUI: false, marker: "command" });
 
-    await sessionStart?.({}, {});
-    expect(mocks.initializeMcp).toHaveBeenCalledTimes(2);
-    expect(mocks.shutdownOAuth).toHaveBeenCalledTimes(2);
+    const secondCtx = { hasUI: false, marker: "second-session" } as any;
+    await handlers.get("session_start")?.({ reason: "replacement" }, secondCtx);
 
-    const activeState = createState();
-    second.resolve(activeState);
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(mocks.updateStatusBar).toHaveBeenCalledWith(activeState);
-    expect(activeState.lifecycle.gracefulShutdown).not.toHaveBeenCalled();
-
-    const staleState = createState();
-    first.resolve(staleState);
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(mocks.updateStatusBar).not.toHaveBeenCalledWith(staleState);
-    expect(mocks.flushMetadataCache).toHaveBeenCalledWith(staleState);
-    expect(staleState.lifecycle.gracefulShutdown).toHaveBeenCalledTimes(1);
+    expect(createMcpRuntime).toHaveBeenCalledTimes(1);
+    expect(runtime.handleSessionStart).toHaveBeenCalledTimes(2);
+    expect(runtime.handleSessionStart).toHaveBeenNthCalledWith(1, { reason: "saved" }, firstCtx);
+    expect(runtime.handleSessionStart).toHaveBeenNthCalledWith(2, { reason: "replacement" }, secondCtx);
   });
 
-  it("shuts down OAuth on session_shutdown", async () => {
-    const state = createState();
-    mocks.initializeMcp.mockResolvedValue(state);
+  it("does not import or start the runtime for no-arg mcp-auth without UI", async () => {
+    const runtime = {
+      handleSessionStart: vi.fn().mockResolvedValue(undefined),
+      handleSessionShutdown: vi.fn().mockResolvedValue(undefined),
+      handleMcpCommand: vi.fn().mockResolvedValue(undefined),
+      handleMcpAuthCommand: vi.fn().mockResolvedValue(undefined),
+      executeProxyTool: vi.fn().mockResolvedValue({ content: [] }),
+      executeDirectTool: vi.fn().mockResolvedValue({ content: [] }),
+    };
+    const createMcpRuntime = vi.fn(() => runtime);
+    vi.doMock("../mcp-runtime.ts", () => ({ createMcpRuntime }));
+    mockCommonModules({
+      config: {
+        mcpServers: {
+          demo: { command: "npx", args: ["-y", "demo-server"], lifecycle: "lazy", directTools: true },
+        },
+      },
+    });
 
-    const { default: mcpAdapter } = await import("../index.ts");
+    const mcpAdapter = await importFacade();
     const { api, handlers } = createPi();
     mcpAdapter(api);
 
-    const sessionStart = handlers.get("session_start");
-    const sessionShutdown = handlers.get("session_shutdown");
+    const sessionCtx = { hasUI: false, marker: "session" } as any;
+    await handlers.get("session_start")?.({ reason: "saved" }, sessionCtx);
 
-    await sessionStart?.({}, {});
-    await Promise.resolve();
-    await Promise.resolve();
+    const mcpAuthCommand = api.registerCommand.mock.calls.find((call: any[]) => call[0] === "mcp-auth")?.[1];
+    const commandCtx = { hasUI: false, marker: "command" } as any;
+    await mcpAuthCommand.handler("   ", commandCtx);
 
-    mocks.shutdownOAuth.mockClear();
-
-    await sessionShutdown?.();
-
-    expect(mocks.shutdownOAuth).toHaveBeenCalledTimes(1);
+    expect(createMcpRuntime).not.toHaveBeenCalled();
+    expect(runtime.handleSessionStart).not.toHaveBeenCalled();
+    expect(runtime.handleMcpAuthCommand).not.toHaveBeenCalled();
   });
 
-  it("routes `/mcp setup` to the onboarding flow", async () => {
-    const state = createState();
-    mocks.initializeMcp.mockResolvedValue(state);
+  it("shares one on-demand startup across concurrent command, proxy, and direct-tool calls", async () => {
+    const startup = deferred<void>();
+    const runtime = {
+      handleSessionStart: vi.fn(() => startup.promise),
+      handleSessionShutdown: vi.fn().mockResolvedValue(undefined),
+      handleMcpCommand: vi.fn().mockResolvedValue(undefined),
+      handleMcpAuthCommand: vi.fn().mockResolvedValue(undefined),
+      executeProxyTool: vi.fn().mockResolvedValue({ content: [] }),
+      executeDirectTool: vi.fn().mockResolvedValue({ content: [] }),
+    };
+    const createMcpRuntime = vi.fn(() => runtime);
+    vi.doMock("../mcp-runtime.ts", () => ({ createMcpRuntime }));
+    mockCommonModules({
+      config: {
+        mcpServers: {
+          demo: { command: "npx", args: ["-y", "demo-server"], lifecycle: "lazy", directTools: true },
+        },
+      },
+    });
 
-    const { default: mcpAdapter } = await import("../index.ts");
+    const mcpAdapter = await importFacade();
     const { api, handlers } = createPi();
     mcpAdapter(api);
 
-    const sessionStart = handlers.get("session_start");
-    await sessionStart?.({}, { hasUI: true, ui: { notify: vi.fn() } });
-    await Promise.resolve();
-    await Promise.resolve();
+    const ctx = { hasUI: false } as any;
+    await handlers.get("session_start")?.({ reason: "saved" }, ctx);
 
-    const commandDef = api.registerCommand.mock.calls.find((call: any[]) => call[0] === "mcp")?.[1];
-    expect(commandDef).toBeDefined();
+    const mcpCommand = api.registerCommand.mock.calls.find((call: any[]) => call[0] === "mcp")?.[1];
+    const proxyTool = api.registerTool.mock.calls.find((call: any[]) => call[0].name === "mcp")?.[0];
+    const directTool = api.registerTool.mock.calls.find((call: any[]) => call[0].name === "demo_search")?.[0];
 
-    await commandDef.handler("setup", { hasUI: true, ui: { notify: vi.fn() } });
+    const pending = [
+      mcpCommand.handler("status", ctx),
+      proxyTool.execute("call-1", { tool: "demo_search", args: "{}" }, undefined, undefined, ctx),
+      directTool.execute("call-2", { q: "value" }, undefined, undefined, ctx),
+    ];
 
-    expect(mocks.openMcpSetup).toHaveBeenCalledWith(state, api, expect.any(Object), undefined, "setup");
+    await vi.waitFor(() => {
+      expect(runtime.handleSessionStart).toHaveBeenCalledTimes(1);
+    });
+    expect(runtime.handleMcpCommand).not.toHaveBeenCalled();
+    expect(runtime.executeProxyTool).not.toHaveBeenCalled();
+    expect(runtime.executeDirectTool).not.toHaveBeenCalled();
+
+    startup.resolve();
+    await Promise.all(pending);
+
+    expect(runtime.handleSessionStart).toHaveBeenCalledTimes(1);
+    expect(runtime.handleMcpCommand).toHaveBeenCalledTimes(1);
+    expect(runtime.executeProxyTool).toHaveBeenCalledTimes(1);
+    expect(runtime.executeDirectTool).toHaveBeenCalledTimes(1);
   });
 
-  it("routes `/mcp logout <server>` to credential logout", async () => {
-    const state = createState();
-    mocks.initializeMcp.mockResolvedValue(state);
+  it("delegates shutdown cleanup once the runtime has been loaded", async () => {
+    const startup = deferred<void>();
+    const runtime = {
+      handleSessionStart: vi.fn(() => startup.promise),
+      handleSessionShutdown: vi.fn().mockResolvedValue(undefined),
+      handleMcpCommand: vi.fn().mockResolvedValue(undefined),
+      handleMcpAuthCommand: vi.fn().mockResolvedValue(undefined),
+      executeProxyTool: vi.fn().mockResolvedValue({ content: [] }),
+      executeDirectTool: vi.fn().mockResolvedValue({ content: [] }),
+    };
+    const createMcpRuntime = vi.fn(() => runtime);
+    vi.doMock("../mcp-runtime.ts", () => ({ createMcpRuntime }));
+    mockCommonModules({
+      config: {
+        mcpServers: {
+          demo: { command: "npx", args: ["-y", "demo-server"], lifecycle: "lazy", directTools: true },
+        },
+      },
+    });
 
-    const { default: mcpAdapter } = await import("../index.ts");
+    const mcpAdapter = await importFacade();
     const { api, handlers } = createPi();
     mcpAdapter(api);
 
-    const ui = { notify: vi.fn() };
-    const sessionStart = handlers.get("session_start");
-    await sessionStart?.({}, { hasUI: true, ui });
-    await Promise.resolve();
-    await Promise.resolve();
+    const ctx = { hasUI: false } as any;
+    await handlers.get("session_start")?.({ reason: "saved" }, ctx);
 
-    const commandDef = api.registerCommand.mock.calls.find((call: any[]) => call[0] === "mcp")?.[1];
-    await commandDef.handler("logout oauth-server", { hasUI: true, ui });
+    const mcpCommand = api.registerCommand.mock.calls.find((call: any[]) => call[0] === "mcp")?.[1];
+    const commandPromise = mcpCommand.handler("status", ctx);
+    await vi.waitFor(() => {
+      expect(runtime.handleSessionStart).toHaveBeenCalledTimes(1);
+    });
 
-    expect(mocks.logoutServer).toHaveBeenCalledWith("oauth-server", state, expect.any(Object));
+    const shutdownPromise = handlers.get("session_shutdown")?.();
+    startup.resolve();
+
+    await Promise.all([commandPromise, shutdownPromise]);
+
+    expect(createMcpRuntime).toHaveBeenCalledTimes(1);
+    expect(runtime.handleSessionShutdown).toHaveBeenCalledTimes(1);
   });
 
-  it("shows usage for `/mcp logout` without a server", async () => {
-    const state = createState();
-    mocks.initializeMcp.mockResolvedValue(state);
+  it("starts the new session after shutdown even if a stale startup promise resolves later", async () => {
+    const firstStartup = deferred<void>();
+    const runtime = {
+      handleSessionStart: vi.fn()
+        .mockImplementationOnce(() => firstStartup.promise)
+        .mockResolvedValue(undefined),
+      handleSessionShutdown: vi.fn().mockResolvedValue(undefined),
+      handleMcpCommand: vi.fn().mockResolvedValue(undefined),
+      handleMcpAuthCommand: vi.fn().mockResolvedValue(undefined),
+      executeProxyTool: vi.fn().mockResolvedValue({ content: [] }),
+      executeDirectTool: vi.fn().mockResolvedValue({ content: [] }),
+    };
+    const createMcpRuntime = vi.fn(() => runtime);
+    vi.doMock("../mcp-runtime.ts", () => ({ createMcpRuntime }));
+    mockCommonModules({
+      config: {
+        mcpServers: {
+          demo: { command: "npx", args: ["-y", "demo-server"], lifecycle: "lazy", directTools: true },
+        },
+      },
+    });
 
-    const { default: mcpAdapter } = await import("../index.ts");
+    const mcpAdapter = await importFacade();
     const { api, handlers } = createPi();
     mcpAdapter(api);
 
-    const ui = { notify: vi.fn() };
-    const sessionStart = handlers.get("session_start");
-    await sessionStart?.({}, { hasUI: true, ui });
-    await Promise.resolve();
-    await Promise.resolve();
+    const mcpCommand = api.registerCommand.mock.calls.find((call: any[]) => call[0] === "mcp")?.[1];
+    const firstSessionCtx = { hasUI: false, marker: "session-1" } as any;
+    await handlers.get("session_start")?.({ reason: "session-1" }, firstSessionCtx);
 
-    const commandDef = api.registerCommand.mock.calls.find((call: any[]) => call[0] === "mcp")?.[1];
-    await commandDef.handler("logout", { hasUI: true, ui });
+    const firstCommandPromise = mcpCommand.handler("status-1", firstSessionCtx);
+    await vi.waitFor(() => {
+      expect(runtime.handleSessionStart).toHaveBeenCalledTimes(1);
+    });
 
-    expect(mocks.logoutServer).not.toHaveBeenCalled();
-    expect(ui.notify).toHaveBeenCalledWith("Usage: /mcp logout <server>", "error");
+    await handlers.get("session_shutdown")?.();
+
+    const secondSessionCtx = { hasUI: false, marker: "session-2" } as any;
+    await handlers.get("session_start")?.({ reason: "session-2" }, secondSessionCtx);
+
+    firstStartup.resolve();
+    await firstCommandPromise;
+
+    await mcpCommand.handler("status-2", secondSessionCtx);
+
+    expect(runtime.handleSessionStart).toHaveBeenCalledTimes(2);
+    expect(runtime.handleSessionStart).toHaveBeenNthCalledWith(1, { reason: "session-1" }, firstSessionCtx);
+    expect(runtime.handleSessionStart).toHaveBeenNthCalledWith(2, { reason: "session-2" }, secondSessionCtx);
+    expect(runtime.handleMcpCommand).toHaveBeenNthCalledWith(2, "status-2", secondSessionCtx);
+    expect(runtime.handleSessionStart.mock.invocationCallOrder[1]).toBeLessThan(
+      runtime.handleMcpCommand.mock.invocationCallOrder[1],
+    );
   });
 
-  it("triggers core reload after setup changes config", async () => {
-    const initialState = createState();
-    mocks.initializeMcp.mockResolvedValue(initialState);
-    mocks.openMcpSetup.mockResolvedValue({ configChanged: true });
+  it("skips the proxy tool once direct tools are fully available", async () => {
+    mockCommonModules({
+      config: {
+        mcpServers: {
+          demo: { command: "npx", args: ["-y", "demo-server"], directTools: true },
+        },
+        settings: { disableProxyTool: true },
+      },
+    });
 
-    const { default: mcpAdapter } = await import("../index.ts");
-    const { api, handlers } = createPi();
-    mcpAdapter(api);
-
-    const ui = { notify: vi.fn() };
-    const reload = vi.fn().mockResolvedValue(undefined);
-    const sessionStart = handlers.get("session_start");
-    await sessionStart?.({}, { hasUI: true, ui });
-    await Promise.resolve();
-    await Promise.resolve();
-
-    const commandDef = api.registerCommand.mock.calls.find((call: any[]) => call[0] === "mcp")?.[1];
-    await commandDef.handler("setup", { hasUI: true, ui, reload });
-
-    expect(reload).toHaveBeenCalledTimes(1);
-    expect(mocks.initializeMcp).toHaveBeenCalledTimes(1);
-    expect(mocks.flushMetadataCache).not.toHaveBeenCalledWith(initialState);
-  });
-
-  it("opens the auth picker for `/mcp-auth` without args in UI sessions", async () => {
-    const state = createState();
-    mocks.initializeMcp.mockResolvedValue(state);
-
-    const { default: mcpAdapter } = await import("../index.ts");
-    const { api, handlers } = createPi();
-    mcpAdapter(api);
-
-    const ui = { notify: vi.fn() };
-    const sessionStart = handlers.get("session_start");
-    await sessionStart?.({}, { hasUI: true, ui });
-    await Promise.resolve();
-    await Promise.resolve();
-
-    const commandDef = api.registerCommand.mock.calls.find((call: any[]) => call[0] === "mcp-auth")?.[1];
-    await commandDef.handler("", { hasUI: true, ui });
-
-    expect(mocks.openMcpAuthPanel).toHaveBeenCalledWith(state, api, expect.any(Object), undefined);
-    expect(mocks.authenticateServer).not.toHaveBeenCalled();
-  });
-
-  it("keeps explicit `/mcp-auth <server>` routed to direct authentication", async () => {
-    const state = createState();
-    mocks.initializeMcp.mockResolvedValue(state);
-
-    const { default: mcpAdapter } = await import("../index.ts");
-    const { api, handlers } = createPi();
-    mcpAdapter(api);
-
-    const ui = { notify: vi.fn() };
-    const sessionStart = handlers.get("session_start");
-    await sessionStart?.({}, { hasUI: true, ui });
-    await Promise.resolve();
-    await Promise.resolve();
-
-    const commandDef = api.registerCommand.mock.calls.find((call: any[]) => call[0] === "mcp-auth")?.[1];
-    await commandDef.handler("github", { hasUI: true, ui });
-
-    expect(mocks.authenticateServer).toHaveBeenCalledWith("github", state.config, expect.any(Object));
-    expect(mocks.openMcpAuthPanel).not.toHaveBeenCalled();
-  });
-
-  it("documents that no-arg `/mcp-auth` has no non-UI picker or command feedback path", async () => {
-    const state = createState();
-    mocks.initializeMcp.mockResolvedValue(state);
-
-    const { default: mcpAdapter } = await import("../index.ts");
+    const mcpAdapter = await importFacade();
     const { api } = createPi();
     mcpAdapter(api);
 
-    const commandDef = api.registerCommand.mock.calls.find((call: any[]) => call[0] === "mcp-auth")?.[1];
-    await commandDef.handler("", { hasUI: false });
-
-    expect(mocks.openMcpAuthPanel).not.toHaveBeenCalled();
-    expect(mocks.authenticateServer).not.toHaveBeenCalled();
-  });
-
-  it("logs initialization errors when updateStatusBar throws", async () => {
-    const state = createState();
-    mocks.initializeMcp.mockResolvedValue(state);
-    mocks.updateStatusBar.mockImplementation(() => {
-      throw new Error("status boom");
-    });
-
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-
-    try {
-      const { default: mcpAdapter } = await import("../index.ts");
-      const { api, handlers } = createPi();
-      mcpAdapter(api);
-
-      const sessionStart = handlers.get("session_start");
-      expect(sessionStart).toBeTypeOf("function");
-
-      await sessionStart?.({}, {});
-      await Promise.resolve();
-      await Promise.resolve();
-      await new Promise((resolve) => setImmediate(resolve));
-
-      expect(consoleError).toHaveBeenCalledWith("MCP initialization failed:", expect.any(Error));
-    } finally {
-      consoleError.mockRestore();
-    }
+    expect(api.registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: "demo_search" }));
+    expect(api.registerTool).not.toHaveBeenCalledWith(expect.objectContaining({ name: "mcp" }));
   });
 });
