@@ -1,6 +1,6 @@
 # Publish checklist — v2.10.2
 
-> Release metadata, docs, local package validation, and release-prep review are prepared; tagging and publish steps remain pending.
+> Release metadata, docs, local package validation, and release-prep review are prepared; the `tlh-v2.10.2` tag and GitHub release already exist, and npm publication remains pending until `.github/workflows/release.yml` runs.
 
 ## Release scope
 
@@ -58,28 +58,24 @@ Dry-run manifest checks on 2026-07-08:
 npm pack --dry-run --json
 ```
 
-## Commit, tag, and GitHub release
+## Tag and GitHub release status
 
-- [ ] commit release changes on a non-main branch
-- [ ] push the release branch
-- [ ] open or update the PR targeting `main`
-- [ ] after PR merge, tag `tlh-v2.10.2` on `main`
-- [ ] push tag `tlh-v2.10.2`
-- [ ] create the GitHub release for tag `tlh-v2.10.2` using `docs/github-release-v2.10.2.md`
+- [x] tag `tlh-v2.10.2` already exists
+- [x] GitHub release for tag `tlh-v2.10.2` already exists using `docs/github-release-v2.10.2.md`
+- [ ] npm publication is still pending
 
-## Stop before npm publish
+## Trusted publishing handoff
 
-> Human-only: npm publishing depends on the authenticated npm session.
+> Publish from GitHub Actions using the existing trusted publishing workflow in `.github/workflows/release.yml`. Do not run `npm publish` from a human shell session.
 
-- [ ] human publishes `@diegopetrucci/pi-mcp-adapter@2.10.2`
-
-```bash
-npm publish --access public
-```
+- [ ] run the GitHub Actions workflow **Release to npm**
+- [ ] use workflow input `ref=tlh-v2.10.2`
+- [ ] confirm the workflow preflight reports `@diegopetrucci/pi-mcp-adapter@2.10.2` is not already published
+- [ ] confirm the workflow completes `npm publish --access public --provenance`
 
 ## Post-publish validation
 
-- [ ] wait for npm propagation before validation (for example, 5 minutes after publish completes)
+- [ ] wait for npm propagation before validation (for example, 5 minutes after the workflow publish completes)
 - [ ] verify the npm registry/package page shows `@diegopetrucci/pi-mcp-adapter@2.10.2`
 - [ ] verify package metadata after propagation
 - [ ] run an install check after propagation
