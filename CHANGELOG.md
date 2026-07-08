@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.2] - 2026-07-08
+
+### Added
+- Added a lazy-loading startup facade for the MCP adapter to preserve upstream-compatible startup behavior while keeping direct-tool discovery available on demand.
+
+### Changed
+- Documented the tlh fork purpose and release handoff so tlh automation keeps using the scoped package `@diegopetrucci/pi-mcp-adapter@2.10.2` with the exact pinned install command `pi install npm:@diegopetrucci/pi-mcp-adapter@2.10.2`.
+
 ## [2.10.1] - 2026-06-29
 
 ### Changed
