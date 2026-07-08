@@ -56,6 +56,7 @@ describe("index facade lifecycle", () => {
 
   function mockCommonModules({
     config = { mcpServers: {} },
+    cache = { servers: {} },
     missingConfiguredDirectToolServers = [],
     directSpecs = [{
       serverName: "demo",
@@ -63,22 +64,35 @@ describe("index facade lifecycle", () => {
       prefixedName: "demo_search",
       description: "Search demo",
     }],
+    loadMcpConfigImpl,
+    loadMetadataCacheImpl,
+    getMissingConfiguredDirectToolServersImpl,
   }: {
     config?: any;
+    cache?: any;
     missingConfiguredDirectToolServers?: string[];
     directSpecs?: any[];
+    loadMcpConfigImpl?: (...args: any[]) => any;
+    loadMetadataCacheImpl?: (...args: any[]) => any;
+    getMissingConfiguredDirectToolServersImpl?: (...args: any[]) => any;
   } = {}) {
+    const loadMcpConfig = vi.fn(loadMcpConfigImpl ?? (() => config));
+    const loadMetadataCache = vi.fn(loadMetadataCacheImpl ?? (() => cache));
+    const getMissingConfiguredDirectToolServers = vi.fn(
+      getMissingConfiguredDirectToolServersImpl ?? (() => missingConfiguredDirectToolServers),
+    );
+
     vi.doMock("../config.ts", () => ({
-      loadMcpConfig: vi.fn(() => config),
+      loadMcpConfig,
     }));
     vi.doMock("../metadata-cache.ts", () => ({
-      loadMetadataCache: vi.fn(() => ({ servers: {} })),
+      loadMetadataCache,
     }));
     vi.doMock("../startup-mcp-facade.ts", () => ({
       buildProxyDescription: vi.fn(() => "MCP gateway"),
       createMcpDirectToolCallRenderer: vi.fn(() => vi.fn()),
       getDirectToolParametersSchema: vi.fn(() => ({ type: "object", properties: {} })),
-      getMissingConfiguredDirectToolServers: vi.fn(() => missingConfiguredDirectToolServers),
+      getMissingConfiguredDirectToolServers,
       MCP_PROXY_TOOL_PARAMETERS_SCHEMA: { type: "object", properties: {} },
       renderMcpProxyToolCall: vi.fn(),
       renderMcpToolResult: vi.fn(),
@@ -88,6 +102,12 @@ describe("index facade lifecycle", () => {
       getConfigPathFromArgv: vi.fn(() => "/tmp/custom-mcp.json"),
       truncateAtWord: vi.fn((text: string) => text),
     }));
+
+    return {
+      loadMcpConfig,
+      loadMetadataCache,
+      getMissingConfiguredDirectToolServers,
+    };
   }
 
   it("registers commands and tools without statically importing the heavy runtime graph", async () => {
@@ -182,7 +202,7 @@ describe("index facade lifecycle", () => {
     expect(createMcpRuntime).not.toHaveBeenCalled();
   });
 
-  it.each(["eager", "keep-alive"])("imports and starts the runtime on %s session_start", async (lifecycle) => {
+  it.each(["eager", "keep-alive"])("imports and starts the runtime on %s session_start from the session cwd config", async (lifecycle) => {
     const runtime = {
       handleSessionStart: vi.fn().mockResolvedValue(undefined),
       handleSessionShutdown: vi.fn().mockResolvedValue(undefined),
@@ -193,11 +213,17 @@ describe("index facade lifecycle", () => {
     };
     const createMcpRuntime = vi.fn(() => runtime);
     vi.doMock("../mcp-runtime.ts", () => ({ createMcpRuntime }));
-    mockCommonModules({
-      config: {
-        mcpServers: {
-          demo: { command: "npx", args: ["-y", "demo-server"], lifecycle },
-        },
+    const { loadMcpConfig } = mockCommonModules({
+      loadMcpConfigImpl: (_overridePath?: string, cwd?: string) => {
+        if (cwd === "/repo/session") {
+          return {
+            mcpServers: {
+              demo: { command: "npx", args: ["-y", "demo-server"], lifecycle },
+            },
+          };
+        }
+
+        return { mcpServers: {} };
       },
     });
 
@@ -205,14 +231,16 @@ describe("index facade lifecycle", () => {
     const { api, handlers } = createPi();
     mcpAdapter(api);
 
-    const ctx = { hasUI: false } as any;
+    const ctx = { hasUI: false, cwd: "/repo/session" } as any;
     await handlers.get("session_start")?.({ reason: lifecycle }, ctx);
 
+    expect(loadMcpConfig).toHaveBeenNthCalledWith(1, "/tmp/custom-mcp.json");
+    expect(loadMcpConfig).toHaveBeenNthCalledWith(2, "/tmp/custom-mcp.json", "/repo/session");
     expect(createMcpRuntime).toHaveBeenCalledWith(api, { earlyConfigPath: "/tmp/custom-mcp.json" });
     expect(runtime.handleSessionStart).toHaveBeenCalledWith({ reason: lifecycle }, ctx);
   });
 
-  it("imports and starts the runtime on session_start when configured direct-tool metadata is missing", async () => {
+  it("imports and starts the runtime on session_start when session-cwd direct-tool metadata is missing", async () => {
     const runtime = {
       handleSessionStart: vi.fn().mockResolvedValue(undefined),
       handleSessionShutdown: vi.fn().mockResolvedValue(undefined),
@@ -223,47 +251,60 @@ describe("index facade lifecycle", () => {
     };
     const createMcpRuntime = vi.fn(() => runtime);
     vi.doMock("../mcp-runtime.ts", () => ({ createMcpRuntime }));
-    mockCommonModules({
-      config: {
-        mcpServers: {
-          demo: { command: "npx", args: ["-y", "demo-server"], lifecycle: "lazy", directTools: true },
-        },
+    const sessionConfig = {
+      mcpServers: {
+        demo: { command: "npx", args: ["-y", "demo-server"], lifecycle: "lazy", directTools: true },
       },
-      missingConfiguredDirectToolServers: ["demo"],
+    };
+    const { getMissingConfiguredDirectToolServers } = mockCommonModules({
+      loadMcpConfigImpl: (_overridePath?: string, cwd?: string) => (
+        cwd === "/repo/session" ? sessionConfig : { mcpServers: {} }
+      ),
+      getMissingConfiguredDirectToolServersImpl: (config: any) => (
+        config === sessionConfig ? ["demo"] : []
+      ),
     });
 
     const mcpAdapter = await importFacade();
     const { api, handlers } = createPi();
     mcpAdapter(api);
 
-    const ctx = { hasUI: false } as any;
+    const ctx = { hasUI: false, cwd: "/repo/session" } as any;
     await handlers.get("session_start")?.({ reason: "cache-miss" }, ctx);
 
+    expect(getMissingConfiguredDirectToolServers).toHaveBeenNthCalledWith(1, { mcpServers: {} }, { servers: {} });
+    expect(getMissingConfiguredDirectToolServers).toHaveBeenNthCalledWith(2, sessionConfig, { servers: {} });
     expect(createMcpRuntime).toHaveBeenCalledTimes(1);
     expect(runtime.handleSessionStart).toHaveBeenCalledWith({ reason: "cache-miss" }, ctx);
   });
 
-  it("does not import the runtime on session_start for missing direct-tool metadata when direct-tool bootstrap is disabled", async () => {
+  it("does not import the runtime on session_start for session-cwd metadata misses when direct-tool bootstrap is disabled", async () => {
     process.env.MCP_DIRECT_TOOLS = "__none__";
 
     const createMcpRuntime = vi.fn();
     vi.doMock("../mcp-runtime.ts", () => ({ createMcpRuntime }));
-    mockCommonModules({
-      config: {
-        mcpServers: {
-          demo: { command: "npx", args: ["-y", "demo-server"], lifecycle: "lazy", directTools: true },
-        },
+    const sessionConfig = {
+      mcpServers: {
+        demo: { command: "npx", args: ["-y", "demo-server"], lifecycle: "lazy", directTools: true },
       },
-      missingConfiguredDirectToolServers: ["demo"],
+    };
+    const { getMissingConfiguredDirectToolServers } = mockCommonModules({
+      loadMcpConfigImpl: (_overridePath?: string, cwd?: string) => (
+        cwd === "/repo/session" ? sessionConfig : { mcpServers: {} }
+      ),
+      getMissingConfiguredDirectToolServersImpl: (config: any) => (
+        config === sessionConfig ? ["demo"] : []
+      ),
     });
 
     const mcpAdapter = await importFacade();
     const { api, handlers } = createPi();
     mcpAdapter(api);
 
-    const ctx = { hasUI: false } as any;
+    const ctx = { hasUI: false, cwd: "/repo/session" } as any;
     await handlers.get("session_start")?.({ reason: "cache-miss" }, ctx);
 
+    expect(getMissingConfiguredDirectToolServers).toHaveBeenNthCalledWith(2, sessionConfig, { servers: {} });
     expect(createMcpRuntime).not.toHaveBeenCalled();
     expect(api.registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: "mcp" }));
   });

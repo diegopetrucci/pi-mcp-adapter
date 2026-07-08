@@ -119,9 +119,15 @@ export default function mcpAdapter(pi: ExtensionAPI) {
       generation: ++nextSessionGeneration,
     };
 
+    const sessionConfig = loadMcpConfig(earlyConfigPath, ctx.cwd);
+    const sessionCache = loadMetadataCache();
+    const sessionMissingConfiguredDirectToolServers = getMissingConfiguredDirectToolServers(
+      sessionConfig,
+      sessionCache,
+    );
     const shouldInitialize = shouldInitializeRuntimeOnSessionStart(
-      earlyConfig,
-      missingConfiguredDirectToolServers,
+      sessionConfig,
+      sessionMissingConfiguredDirectToolServers,
       directToolBootstrapDisabled,
     );
     const hasActiveOrInflightRuntimeStart = startedGeneration > 0 || startupPromise !== null;
