@@ -6,7 +6,7 @@ on:
       ref:
         description: Git ref to publish
         required: true
-        default: tlh-v2.10.2
+        default: tlh-v2.11.0
 
 permissions:
   contents: read

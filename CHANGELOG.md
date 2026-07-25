@@ -7,9 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- Added maintainer upstream-intake policy docs: `docs/UPSTREAM-SYNC.md`, `.upstream-ledger.jsonl`, and `docs/tlh-patch-inventory.md`, establishing the fork's non-rebase merge/squash-import workflow without adopting upstream `v2.11.0` or changing runtime behavior.
-
 ## [2.11.0] - 2026-07-03
 
 ### Changed
@@ -31,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Re-flagged failed MCP tool calls (`tool_error`/`call_failed`) as errors so they are recorded as failures (`isError: true`) instead of successes. Thanks @ishinder for PR #157.
 - Honored configured `requestTimeoutMs` during MCP connection, discovery, tool, resource, and UI proxy requests. Thanks @mizuikki for PR #155.
 - Rendered successful MCP `structuredContent` when servers return it without `content`. Thanks @dovixman for PR #146.
+
+### TLH fork release - 2026-07-25
+
+#### Added
+- Added maintainer upstream-intake policy docs: `docs/UPSTREAM-SYNC.md`, `.upstream-ledger.jsonl`, and `docs/tlh-patch-inventory.md`, establishing the fork's non-rebase merge/squash-import workflow while preserving upstream `v2.11.0` ancestry and runtime behavior.
+
+#### Changed
+- Prepared the scoped TLH fork release `@diegopetrucci/pi-mcp-adapter@2.11.0` with the exact install pin `pi install npm:@diegopetrucci/pi-mcp-adapter@2.11.0`, the planned tag `tlh-v2.11.0`, and trusted GitHub Actions OIDC publication while retaining the fork's lazy startup facade and scoped package identity deltas.
 
 ## [2.10.2] - 2026-07-08
 
