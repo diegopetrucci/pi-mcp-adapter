@@ -42,8 +42,9 @@ export default function mcpAdapter(pi: ExtensionAPI) {
         earlyCache,
         prefix,
         envRaw?.split(",").map(s => s.trim()).filter(Boolean),
+        process.cwd(),
       );
-  const missingConfiguredDirectToolServers = getMissingConfiguredDirectToolServers(earlyConfig, earlyCache);
+  const missingConfiguredDirectToolServers = getMissingConfiguredDirectToolServers(earlyConfig, earlyCache, process.cwd());
   const shouldRegisterProxyTool =
     earlyConfig.settings?.disableProxyTool !== true
     || directSpecs.length === 0
@@ -125,6 +126,7 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     const sessionMissingConfiguredDirectToolServers = getMissingConfiguredDirectToolServers(
       sessionConfig,
       sessionCache,
+      ctx.cwd,
     );
     const shouldInitialize = shouldInitializeRuntimeOnSessionStart(
       sessionConfig,

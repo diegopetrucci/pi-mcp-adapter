@@ -104,22 +104,24 @@ export async function guardMcpOutput(
     options.emptyTextFallback,
   );
 
+  const affixedContent = addAffixes(normalizedContent, prefix, suffix);
+
   if (options.enabled === false) {
     return {
-      content: addAffixes(normalizedContent, prefix, suffix),
+      content: affixedContent,
       mcpResult: options.rawMcpResult,
     };
   }
 
-  const imageBlocks = normalizedContent.filter((block) => block.type === "image");
-  const textOutput = normalizedContent
+  const imageBlocks = affixedContent.filter((block) => block.type === "image");
+  const textOutput = affixedContent
     .filter((block) => block.type === "text")
     .map((block) => (block as { text: string }).text)
     .join("\n");
-  const composedOutput = `${prefix}${textOutput}${suffix}`;
+  const composedOutput = textOutput;
   const stats = textStats(composedOutput);
 
-  let guardedContent: ContentBlock[] = addAffixes(normalizedContent, prefix, suffix);
+  let guardedContent: ContentBlock[] = affixedContent;
   let outputGuard: McpOutputGuardDetails | undefined;
 
   if (stats.bytes > maxBytes || stats.lines > maxLines) {
@@ -127,10 +129,13 @@ export async function guardMcpOutput(
     const notice = formatTruncationNotice(stats, fullOutputPath, writeError);
     const previewBudget = reserveBudget(maxBytes, maxLines, notice);
     const preview = truncateHead(composedOutput, previewBudget.maxBytes, previewBudget.maxLines);
-    const finalText = `${preview.content}\n\n${notice}`;
+    guardedContent = truncateContentInOrder(affixedContent, preview.content, notice);
+    const finalText = guardedContent
+      .filter((block) => block.type === "text")
+      .map((block) => (block as { text: string }).text)
+      .join("\n");
     const finalStats = textStats(finalText);
 
-    guardedContent = [{ type: "text" as const, text: finalText }, ...imageBlocks];
     outputGuard = {
       truncated: true,
       originalBytes: stats.bytes,
@@ -201,6 +206,71 @@ function addAffixes(content: ContentBlock[], prefix: string, suffix: string): Co
   }
 
   return next;
+}
+
+function truncateContentInOrder(content: ContentBlock[], previewText: string, notice: string): ContentBlock[] {
+  type TextSpan = {
+    contentIndex: number;
+    start: number;
+    end: number;
+    isLast: boolean;
+  };
+
+  const guarded: ContentBlock[] = [];
+  const textSpans: TextSpan[] = [];
+  const textBlockIndexes = content
+    .map((block, index) => block.type === "text" ? index : -1)
+    .filter((index) => index >= 0);
+  let cursor = 0;
+
+  for (const [textIndex, contentIndex] of textBlockIndexes.entries()) {
+    const block = content[contentIndex];
+    if (block.type !== "text") continue;
+    const start = cursor;
+    const end = start + block.text.length;
+    const isLast = textIndex === textBlockIndexes.length - 1;
+    textSpans.push({ contentIndex, start, end, isLast });
+    cursor = end;
+    if (!isLast) cursor += 1;
+  }
+
+  const boundary = previewText.length;
+  let insertedNotice = false;
+  let textSpanIndex = 0;
+
+  for (let contentIndex = 0; contentIndex < content.length; contentIndex++) {
+    const block = content[contentIndex];
+    if (block.type === "image") {
+      guarded.push(block);
+      continue;
+    }
+
+    const span = textSpans[textSpanIndex++];
+    if (!span) continue;
+
+    if (span.end <= boundary) {
+      guarded.push(block);
+      continue;
+    }
+
+    if (span.start < boundary) {
+      guarded.push({ ...block, text: block.text.slice(0, boundary - span.start) });
+      guarded.push({ type: "text", text: notice });
+      insertedNotice = true;
+      continue;
+    }
+
+    if (!insertedNotice) {
+      guarded.push({ type: "text", text: notice });
+      insertedNotice = true;
+    }
+  }
+
+  if (!insertedNotice) {
+    guarded.push({ type: "text", text: notice });
+  }
+
+  return guarded;
 }
 
 function reserveBudget(maxBytes: number, maxLines: number, notice: string): { maxBytes: number; maxLines: number } {

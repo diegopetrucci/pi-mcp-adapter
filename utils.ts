@@ -111,7 +111,12 @@ export function normalizeDirectToolInputSchema(schema: unknown): Record<string, 
     ? schema as Record<string, unknown>
     : { type: "object", properties: {} };
   const { $schema, additionalProperties, ...normalized } = inputSchema;
-  return normalized;
+  if (additionalProperties === false) {
+    return normalized;
+  }
+  return additionalProperties === undefined
+    ? normalized
+    : { ...normalized, additionalProperties };
 }
 
 export function formatAuthRequiredMessage(

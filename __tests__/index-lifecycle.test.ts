@@ -272,8 +272,8 @@ describe("index facade lifecycle", () => {
     const ctx = { hasUI: false, cwd: "/repo/session" } as any;
     await handlers.get("session_start")?.({ reason: "cache-miss" }, ctx);
 
-    expect(getMissingConfiguredDirectToolServers).toHaveBeenNthCalledWith(1, { mcpServers: {} }, { servers: {} });
-    expect(getMissingConfiguredDirectToolServers).toHaveBeenNthCalledWith(2, sessionConfig, { servers: {} });
+    expect(getMissingConfiguredDirectToolServers).toHaveBeenNthCalledWith(1, { mcpServers: {} }, { servers: {} }, process.cwd());
+    expect(getMissingConfiguredDirectToolServers).toHaveBeenNthCalledWith(2, sessionConfig, { servers: {} }, "/repo/session");
     expect(createMcpRuntime).toHaveBeenCalledTimes(1);
     expect(runtime.handleSessionStart).toHaveBeenCalledWith({ reason: "cache-miss" }, ctx);
   });
@@ -304,7 +304,7 @@ describe("index facade lifecycle", () => {
     const ctx = { hasUI: false, cwd: "/repo/session" } as any;
     await handlers.get("session_start")?.({ reason: "cache-miss" }, ctx);
 
-    expect(getMissingConfiguredDirectToolServers).toHaveBeenNthCalledWith(2, sessionConfig, { servers: {} });
+    expect(getMissingConfiguredDirectToolServers).toHaveBeenNthCalledWith(2, sessionConfig, { servers: {} }, "/repo/session");
     expect(createMcpRuntime).not.toHaveBeenCalled();
     expect(api.registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: "mcp" }));
   });

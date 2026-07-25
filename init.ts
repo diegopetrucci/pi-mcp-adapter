@@ -72,6 +72,7 @@ export async function initializeMcp(
     consentManager,
     uiServer: null,
     completedUiSessions: [],
+    sessionCwd: ctx.cwd,
     openBrowser: (url: string) => openUrl(pi, url, process.env.BROWSER),
     ui,
     sendMessage: (message, options) => pi.sendMessage(message as unknown as Parameters<typeof pi.sendMessage>[0], options),
@@ -112,7 +113,7 @@ export async function initializeMcp(
       lifecycle.markKeepAlive(name, definition);
     }
 
-    if (cache?.servers?.[name] && isServerCacheValid(cache.servers[name], definition)) {
+    if (cache?.servers?.[name] && isServerCacheValid(cache.servers[name], definition, undefined, ctx.cwd)) {
       const metadata = reconstructToolMetadata(name, cache.servers[name], prefix, definition);
       toolMetadata.set(name, metadata);
     }
@@ -176,7 +177,7 @@ export async function initializeMcp(
   const envDirect = process.env.MCP_DIRECT_TOOLS;
   if (envDirect !== "__none__") {
     const currentCache = loadMetadataCache();
-    const missingCacheServers = getMissingConfiguredDirectToolServers(config, currentCache);
+    const missingCacheServers = getMissingConfiguredDirectToolServers(config, currentCache, ctx.cwd);
 
     if (missingCacheServers.length > 0) {
       const bootstrapResults = await parallelLimit(
@@ -209,7 +210,7 @@ export async function initializeMcp(
 
   lifecycle.setReconnectCallback((serverName) => {
     updateServerMetadata(state, serverName);
-    updateMetadataCache(state, serverName);
+    updateMetadataCache(state, serverName, state.sessionCwd);
     state.failureTracker.delete(serverName);
     updateStatusBar(state);
   });
@@ -238,14 +239,14 @@ export function updateServerMetadata(state: McpExtensionState, serverName: strin
   state.toolMetadata.set(serverName, metadata);
 }
 
-export function updateMetadataCache(state: McpExtensionState, serverName: string): void {
+export function updateMetadataCache(state: McpExtensionState, serverName: string, defaultCwd = state.sessionCwd): void {
   const connection = state.manager.getConnection(serverName);
   if (!connection || connection.status !== "connected") return;
 
   const definition = state.config.mcpServers[serverName];
   if (!definition) return;
 
-  const configHash = computeServerHash(definition);
+  const configHash = computeServerHash(definition, defaultCwd);
   const existing = loadMetadataCache();
   const existingEntry = existing?.servers?.[serverName];
 
@@ -274,7 +275,7 @@ export function updateMetadataCache(state: McpExtensionState, serverName: string
 export function flushMetadataCache(state: McpExtensionState): void {
   for (const [name, connection] of state.manager.getAllConnections()) {
     if (connection.status === "connected") {
-      updateMetadataCache(state, name);
+      updateMetadataCache(state, name, state.sessionCwd);
     }
   }
 }

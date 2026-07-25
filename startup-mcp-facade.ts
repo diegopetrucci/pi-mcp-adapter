@@ -18,6 +18,7 @@ export function resolveDirectTools(
   cache: MetadataCache | null,
   prefix: "server" | "none" | "short",
   envOverride?: string[],
+  defaultCwd?: string,
 ): DirectToolSpec[] {
   const specs: DirectToolSpec[] = [];
   if (!cache) return specs;
@@ -47,7 +48,7 @@ export function resolveDirectTools(
 
   for (const [serverName, definition] of Object.entries(config.mcpServers)) {
     const serverCache = cache.servers[serverName];
-    if (!serverCache || !isServerCacheValid(serverCache, definition)) continue;
+    if (!serverCache || !isServerCacheValid(serverCache, definition, undefined, defaultCwd)) continue;
 
     let toolFilter: true | string[] | false = false;
 
@@ -121,6 +122,7 @@ export function resolveDirectTools(
 export function getMissingConfiguredDirectToolServers(
   config: McpConfig,
   cache: MetadataCache | null,
+  defaultCwd?: string,
 ): string[] {
   const missing: string[] = [];
   const globalDirect = config.settings?.directTools;
@@ -133,7 +135,7 @@ export function getMissingConfiguredDirectToolServers(
     if (!hasDirectTools) continue;
 
     const serverCache = cache?.servers?.[serverName];
-    if (!serverCache || !isServerCacheValid(serverCache, definition)) {
+    if (!serverCache || !isServerCacheValid(serverCache, definition, undefined, defaultCwd)) {
       missing.push(serverName);
     }
   }
