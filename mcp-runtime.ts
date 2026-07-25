@@ -31,6 +31,7 @@ import {
   executeUiMessages,
 } from "./proxy-modes.ts";
 import { initializeOAuth, shutdownOAuth } from "./mcp-auth-flow.ts";
+import { abortable, throwIfAborted } from "./abort.ts";
 
 export interface McpRuntime {
   handleSessionStart(event: unknown, ctx: ExtensionContext): Promise<void>;
@@ -256,7 +257,7 @@ export function createMcpRuntime(
       await authenticateServer(serverName, currentState.config, ctx);
     },
 
-    async executeProxyTool(_toolCallId, params) {
+    async executeProxyTool(_toolCallId, params, signal) {
       let parsedArgs: Record<string, unknown> | undefined;
       if (params.args) {
         try {
@@ -275,8 +276,9 @@ export function createMcpRuntime(
 
       if (!state && initPromise) {
         try {
-          state = await initPromise;
+          state = await abortable(initPromise, signal);
         } catch (error) {
+          throwIfAborted(signal);
           const message = error instanceof Error ? error.message : String(error);
           return {
             content: [{ type: "text" as const, text: `MCP initialization failed: ${message}` }],
@@ -320,10 +322,10 @@ export function createMcpRuntime(
         return executeAuthComplete(state, params.server, input);
       }
       if (params.tool) {
-        return executeCall(state, params.tool, parsedArgs, params.server, () => pi.getAllTools());
+        return executeCall(state, params.tool, parsedArgs, params.server, () => pi.getAllTools(), signal);
       }
       if (params.connect) {
-        return executeConnect(state, params.connect);
+        return executeConnect(state, params.connect, signal);
       }
       if (params.describe) {
         return executeDescribe(state, params.describe);

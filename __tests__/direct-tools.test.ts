@@ -112,6 +112,18 @@ describe("metadata cache hashing", () => {
     );
   });
 
+  it("hashes the effective default cwd only for stdio servers without an explicit cwd", () => {
+    const definition = { command: "node", args: ["server.js"] };
+
+    expect(computeServerHash(definition, "/repo/a")).not.toBe(computeServerHash(definition, "/repo/b"));
+    expect(computeServerHash({ ...definition, cwd: "/fixed" }, "/repo/a")).toBe(
+      computeServerHash({ ...definition, cwd: "/fixed" }, "/repo/b"),
+    );
+    expect(computeServerHash({ url: "https://example.test/mcp" }, "/repo/a")).toBe(
+      computeServerHash({ url: "https://example.test/mcp" }, "/repo/b"),
+    );
+  });
+
   it("hashes interpolated env values", () => {
     process.env.MCP_HASH_ENV = "/tmp/data-one";
     const first = computeServerHash({ command: "node", env: { DATA_DIR: "${MCP_HASH_ENV}" } });
@@ -185,6 +197,33 @@ describe("metadata cache hashing", () => {
     process.env.MCP_HASH_TOKEN = "token-two";
 
     expect(isServerCacheValid(entry, definition)).toBe(false);
+  });
+
+  it("invalidates stdio cache entries across session cwd changes when cwd is implicit", () => {
+    const definition = { command: "node", args: ["server.js"] };
+    const entry = {
+      configHash: computeServerHash(definition, "/repo/a"),
+      cachedAt: Date.now(),
+      tools: [],
+      resources: [],
+    };
+
+    expect(isServerCacheValid(entry, definition, undefined, "/repo/a")).toBe(true);
+    expect(isServerCacheValid(entry, definition, undefined, "/repo/b")).toBe(false);
+  });
+
+  it("keeps numeric maxAgeMs positional semantics alongside implicit cwd hashing", () => {
+    const definition = { command: "node", args: ["server.js"] };
+    const entry = {
+      configHash: computeServerHash(definition, "/repo/a"),
+      cachedAt: Date.now() - 2_000,
+      tools: [],
+      resources: [],
+    };
+
+    expect(isServerCacheValid(entry, definition, 5_000, "/repo/a")).toBe(true);
+    expect(isServerCacheValid(entry, definition, 1_000, "/repo/a")).toBe(false);
+    expect(isServerCacheValid(entry, definition, 5_000, "/repo/b")).toBe(false);
   });
 });
 

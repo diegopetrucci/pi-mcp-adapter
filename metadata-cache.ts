@@ -81,15 +81,16 @@ export function saveMetadataCache(cache: MetadataCache): void {
   renameSync(tmpPath, cachePath);
 }
 
-export function computeServerHash(definition: ServerEntry): string {
+export function computeServerHash(definition: ServerEntry, defaultCwd?: string): string {
   // Hash only fields that affect server identity and tool/resource output.
-  // Exclude lifecycle, idleTimeout, debug — those are runtime behavior settings
+  // Exclude lifecycle, idleTimeout, requestTimeoutMs, debug — those are runtime behavior settings
   // that don't change which tools a server exposes.
+  const resolvedCwd = resolveConfigPath(definition.cwd);
   const identity: Record<string, unknown> = {
     command: definition.command,
     args: definition.args,
     env: interpolateEnvRecord(definition.env),
-    cwd: resolveConfigPath(definition.cwd),
+    cwd: resolvedCwd ?? (definition.command ? defaultCwd : undefined),
     url: definition.url,
     headers: interpolateEnvRecord(definition.headers),
     auth: definition.auth,
@@ -105,11 +106,13 @@ export function computeServerHash(definition: ServerEntry): string {
 export function isServerCacheValid(
   entry: ServerCacheEntry,
   definition: ServerEntry,
-  maxAgeMs: number = CACHE_MAX_AGE_MS
+  maxAgeMs?: number,
+  defaultCwd?: string,
 ): boolean {
-  if (!entry || entry.configHash !== computeServerHash(definition)) return false;
+  const effectiveMaxAgeMs = maxAgeMs ?? CACHE_MAX_AGE_MS;
+  if (!entry || entry.configHash !== computeServerHash(definition, defaultCwd)) return false;
   if (!entry.cachedAt || typeof entry.cachedAt !== "number") return false;
-  if (maxAgeMs > 0 && Date.now() - entry.cachedAt > maxAgeMs) return false;
+  if (effectiveMaxAgeMs > 0 && Date.now() - entry.cachedAt > effectiveMaxAgeMs) return false;
   return true;
 }
 

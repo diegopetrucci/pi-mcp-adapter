@@ -27,7 +27,7 @@ describe("startup MCP facade support", () => {
       version: 1,
       servers: {
         fresh: {
-          configHash: computeServerHash(config.mcpServers.fresh),
+          configHash: computeServerHash(config.mcpServers.fresh, "/repo/a"),
           cachedAt: Date.now(),
           tools: [],
           resources: [],
@@ -41,7 +41,8 @@ describe("startup MCP facade support", () => {
       },
     };
 
-    expect(getMissingConfiguredDirectToolServers(config, cache)).toEqual(["stale", "missing"]);
+    expect(getMissingConfiguredDirectToolServers(config, cache, "/repo/a")).toEqual(["stale", "missing"]);
+    expect(getMissingConfiguredDirectToolServers(config, cache, "/repo/b")).toEqual(["fresh", "stale", "missing"]);
   });
 
   it("provides the same startup-time schemas used by index registration", () => {

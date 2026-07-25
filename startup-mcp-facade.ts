@@ -2,13 +2,14 @@ import { Type } from "typebox";
 import type { DirectToolSpec, McpConfig } from "./types.ts";
 import type { MetadataCache } from "./metadata-cache.ts";
 import { isServerCacheValid } from "./metadata-cache.ts";
-import { formatToolName, isToolExcluded } from "./types.ts";
 import { resourceNameToToolName } from "./resource-tools.ts";
 import {
   createMcpDirectToolCallRenderer,
   renderMcpProxyToolCall,
   renderMcpToolResult,
 } from "./tool-result-renderer.ts";
+import { formatToolName, isToolExcluded } from "./types.ts";
+import { normalizeDirectToolInputSchema } from "./utils.ts";
 
 const BUILTIN_NAMES = new Set(["read", "bash", "edit", "write", "grep", "find", "ls", "mcp"]);
 
@@ -17,6 +18,7 @@ export function resolveDirectTools(
   cache: MetadataCache | null,
   prefix: "server" | "none" | "short",
   envOverride?: string[],
+  defaultCwd?: string,
 ): DirectToolSpec[] {
   const specs: DirectToolSpec[] = [];
   if (!cache) return specs;
@@ -46,7 +48,7 @@ export function resolveDirectTools(
 
   for (const [serverName, definition] of Object.entries(config.mcpServers)) {
     const serverCache = cache.servers[serverName];
-    if (!serverCache || !isServerCacheValid(serverCache, definition)) continue;
+    if (!serverCache || !isServerCacheValid(serverCache, definition, undefined, defaultCwd)) continue;
 
     let toolFilter: true | string[] | false = false;
 
@@ -120,6 +122,7 @@ export function resolveDirectTools(
 export function getMissingConfiguredDirectToolServers(
   config: McpConfig,
   cache: MetadataCache | null,
+  defaultCwd?: string,
 ): string[] {
   const missing: string[] = [];
   const globalDirect = config.settings?.directTools;
@@ -132,7 +135,7 @@ export function getMissingConfiguredDirectToolServers(
     if (!hasDirectTools) continue;
 
     const serverCache = cache?.servers?.[serverName];
-    if (!serverCache || !isServerCacheValid(serverCache, definition)) {
+    if (!serverCache || !isServerCacheValid(serverCache, definition, undefined, defaultCwd)) {
       missing.push(serverName);
     }
   }
@@ -201,7 +204,7 @@ export function buildProxyDescription(
 }
 
 export function getDirectToolParametersSchema(spec: Pick<DirectToolSpec, "inputSchema">) {
-  return Type.Unsafe((spec.inputSchema || { type: "object", properties: {} }) as never);
+  return Type.Unsafe(normalizeDirectToolInputSchema(spec.inputSchema) as never);
 }
 
 export const MCP_PROXY_TOOL_PARAMETERS_SCHEMA = Type.Object({

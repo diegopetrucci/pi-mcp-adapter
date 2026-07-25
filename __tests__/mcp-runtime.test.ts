@@ -66,10 +66,12 @@ vi.mock("../proxy-modes.ts", () => ({
 
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
+  let reject!: (error?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
     resolve = res;
+    reject = rej;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function createState() {
@@ -234,14 +236,16 @@ describe("mcp runtime", () => {
     await Promise.resolve();
     await Promise.resolve();
 
+    const controller = new AbortController();
+
     await runtime.executeProxyTool("call-1", { action: "auth-start", server: "demo" });
     await runtime.executeProxyTool("call-2", {
       action: "auth-complete",
       server: "demo",
       args: '{"redirectUrl":"http://localhost/callback?code=abc"}',
     });
-    await runtime.executeProxyTool("call-3", { tool: "demo_search", args: '{"q":"term"}', server: "demo" });
-    await runtime.executeProxyTool("call-4", { connect: "demo" });
+    await runtime.executeProxyTool("call-3", { tool: "demo_search", args: '{"q":"term"}', server: "demo" }, controller.signal);
+    await runtime.executeProxyTool("call-4", { connect: "demo" }, controller.signal);
     await runtime.executeProxyTool("call-5", { describe: "demo_search" });
     await runtime.executeProxyTool("call-6", { search: "demo", regex: true, server: "demo", includeSchemas: false });
     await runtime.executeProxyTool("call-7", { server: "demo" });
@@ -249,13 +253,47 @@ describe("mcp runtime", () => {
 
     expect(mocks.executeAuthStart).toHaveBeenCalledWith(state, "demo");
     expect(mocks.executeAuthComplete).toHaveBeenCalledWith(state, "demo", "http://localhost/callback?code=abc");
-    expect(mocks.executeCall).toHaveBeenCalledWith(state, "demo_search", { q: "term" }, "demo", expect.any(Function));
+    expect(mocks.executeCall).toHaveBeenCalledWith(state, "demo_search", { q: "term" }, "demo", expect.any(Function), controller.signal);
     expect(mocks.executeCall.mock.calls[0][4]()).toEqual(pi.getAllTools());
-    expect(mocks.executeConnect).toHaveBeenCalledWith(state, "demo");
+    expect(mocks.executeConnect).toHaveBeenCalledWith(state, "demo", controller.signal);
     expect(mocks.executeDescribe).toHaveBeenCalledWith(state, "demo_search");
     expect(mocks.executeSearch).toHaveBeenCalledWith(state, "demo", true, "demo", false);
     expect(mocks.executeList).toHaveBeenCalledWith(state, "demo");
     expect(mocks.executeStatus).toHaveBeenCalledWith(state);
+  });
+
+  it("rethrows proxy-tool cancellation while initialization is still pending", async () => {
+    const pendingInit = createDeferred<any>();
+    mocks.initializeMcp.mockReturnValue(pendingInit.promise);
+
+    const { createMcpRuntime } = await import("../mcp-runtime.ts");
+    const runtime = createMcpRuntime(createPi(), {});
+
+    await runtime.handleSessionStart({}, {} as any);
+
+    const controller = new AbortController();
+    const resultPromise = runtime.executeProxyTool("call-1", { tool: "demo_search" }, controller.signal);
+    await Promise.resolve();
+    controller.abort(new Error("user cancelled"));
+
+    await expect(resultPromise).rejects.toThrow("user cancelled");
+  });
+
+  it("returns init_failed for genuine proxy-tool initialization failures", async () => {
+    const pendingInit = createDeferred<any>();
+    mocks.initializeMcp.mockReturnValue(pendingInit.promise);
+
+    const { createMcpRuntime } = await import("../mcp-runtime.ts");
+    const runtime = createMcpRuntime(createPi(), {});
+
+    await runtime.handleSessionStart({}, {} as any);
+
+    const resultPromise = runtime.executeProxyTool("call-1", { tool: "demo_search" });
+    pendingInit.reject(new Error("boom"));
+
+    await expect(resultPromise).resolves.toMatchObject({
+      details: { error: "init_failed", message: "boom" },
+    });
   });
 
   it("delegates direct tool execution to createDirectToolExecutor with runtime state accessors", async () => {
@@ -286,5 +324,36 @@ describe("mcp runtime", () => {
     expect(mocks.createDirectToolExecutor.mock.calls[0][0]()).toBe(state);
     expect(mocks.createDirectToolExecutor.mock.calls[0][1]()).toBeNull();
     expect(directExecutor).toHaveBeenCalledWith("call-1", { q: "term" }, undefined, undefined, ctx);
+  });
+
+  it("passes the in-flight init promise through direct tool delegation during startup", async () => {
+    const pendingInit = createDeferred<any>();
+    const directResult = { content: [{ type: "text", text: "ok" }] };
+    const directExecutor = vi.fn().mockResolvedValue(directResult);
+    mocks.initializeMcp.mockReturnValue(pendingInit.promise);
+    mocks.createDirectToolExecutor.mockReturnValue(directExecutor);
+
+    const { createMcpRuntime } = await import("../mcp-runtime.ts");
+    const runtime = createMcpRuntime(createPi(), {});
+    const spec = {
+      serverName: "demo",
+      originalName: "search",
+      prefixedName: "demo_search",
+      description: "Search demo",
+    } as any;
+    const ctx = { hasUI: false } as any;
+    const signal = new AbortController().signal;
+    const onUpdate = vi.fn();
+
+    await runtime.handleSessionStart({}, ctx);
+    const resultPromise = runtime.executeDirectTool(spec, "call-2", { q: "term" }, signal, onUpdate, ctx);
+
+    expect(mocks.createDirectToolExecutor).toHaveBeenCalledWith(expect.any(Function), expect.any(Function), spec);
+    expect(mocks.createDirectToolExecutor.mock.calls[0][0]()).toBeNull();
+    expect(mocks.createDirectToolExecutor.mock.calls[0][1]()).toBe(pendingInit.promise);
+
+    pendingInit.resolve(createState());
+    await expect(resultPromise).resolves.toBe(directResult);
+    expect(directExecutor).toHaveBeenCalledWith("call-2", { q: "term" }, signal, onUpdate, ctx);
   });
 });
