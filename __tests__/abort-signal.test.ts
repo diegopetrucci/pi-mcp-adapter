@@ -36,6 +36,26 @@ function connectedState(client: Record<string, unknown>) {
   } as any;
 }
 
+function lazyConnectState({
+  connection,
+  failedAt,
+}: {
+  connection?: { status: string; client?: Record<string, unknown>; tools?: unknown[]; resources?: unknown[] };
+  failedAt?: number;
+} = {}) {
+  return {
+    config: { mcpServers: { demo: { command: "node", args: ["server.js"] } } },
+    manager: {
+      getConnection: vi.fn(() => connection),
+      getAllConnections: vi.fn(() => new Map()),
+      connect: vi.fn(async () => ({ status: "connected", tools: [], resources: [] })),
+    },
+    toolMetadata: new Map(),
+    failureTracker: failedAt === undefined ? new Map() : new Map([["demo", failedAt]]),
+    ui: { setStatus: vi.fn() },
+  } as any;
+}
+
 describe("AbortSignal propagation", () => {
   it("abortable rejects promptly when the host signal aborts", async () => {
     const controller = new AbortController();
@@ -152,24 +172,51 @@ describe("AbortSignal propagation", () => {
 
   it("lazyConnect rethrows host aborts without updating the failure backoff", async () => {
     const controller = new AbortController();
-    const state = {
-      config: { mcpServers: { demo: { command: "node", args: ["server.js"] } } },
-      manager: {
-        getConnection: vi.fn(() => undefined),
-        connect: vi.fn(async (_name, _definition, signal?: AbortSignal) => {
-          signal?.throwIfAborted();
-          return { status: "connected", tools: [], resources: [] };
-        }),
-      },
-      toolMetadata: new Map(),
-      failureTracker: new Map(),
-      ui: { setStatus: vi.fn() },
-    } as any;
+    const state = lazyConnectState();
 
     controller.abort(new Error("user cancelled"));
 
     await expect(lazyConnect(state, "demo", controller.signal)).rejects.toThrow("user cancelled");
     expect(state.failureTracker.size).toBe(0);
+  });
+
+  it("lazyConnect throws a pre-aborted signal reason before consulting shortcuts or connecting", async () => {
+    const controller = new AbortController();
+    const abortError = new Error("user cancelled");
+    const state = lazyConnectState({
+      connection: { status: "connected", tools: [], resources: [] },
+      failedAt: Date.now(),
+    });
+
+    controller.abort(abortError);
+
+    await expect(lazyConnect(state, "demo", controller.signal)).rejects.toBe(abortError);
+    expect(state.manager.getConnection).not.toHaveBeenCalled();
+    expect(state.manager.connect).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: "with an active signal", signal: new AbortController().signal },
+    { label: "without a signal", signal: undefined },
+  ])("lazyConnect preserves the connected shortcut $label", async ({ signal }) => {
+    const state = lazyConnectState({ connection: { status: "connected", tools: [], resources: [] } });
+
+    await expect(lazyConnect(state, "demo", signal)).resolves.toBe(true);
+    expect(state.manager.connect).not.toHaveBeenCalled();
+  });
+
+  it("lazyConnect preserves the needs-auth shortcut for active signals", async () => {
+    const state = lazyConnectState({ connection: { status: "needs-auth", tools: [], resources: [] } });
+
+    await expect(lazyConnect(state, "demo", new AbortController().signal)).resolves.toBe(false);
+    expect(state.manager.connect).not.toHaveBeenCalled();
+  });
+
+  it("lazyConnect preserves the backoff shortcut when no signal is provided", async () => {
+    const state = lazyConnectState({ failedAt: Date.now() });
+
+    await expect(lazyConnect(state, "demo")).resolves.toBe(false);
+    expect(state.manager.connect).not.toHaveBeenCalled();
   });
 
   it("server-manager resource discovery does not swallow host aborts", async () => {

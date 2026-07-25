@@ -306,6 +306,8 @@ export function getFailureAgeSeconds(state: McpExtensionState, serverName: strin
 }
 
 export async function lazyConnect(state: McpExtensionState, serverName: string, signal?: AbortSignal): Promise<boolean> {
+  throwIfAborted(signal);
+
   const connection = state.manager.getConnection(serverName);
   if (connection?.status === "needs-auth") {
     return false;
