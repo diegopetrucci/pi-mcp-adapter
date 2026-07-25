@@ -12,7 +12,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:oauth-provider": "node --import tsx --test mcp-oauth-provider.test.ts"
+    "test:oauth-provider": "node --import tsx --test mcp-oauth-provider.test.ts",
+    "upstream:report": "./scripts/upstream-report.sh"
   },
   "repository": {
     "type": "git",

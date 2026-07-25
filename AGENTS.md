@@ -10,11 +10,14 @@
 
 ## Fork sync policy
 
-- Keep this fork close to upstream `nicobailon/pi-mcp-adapter`.
-- Prefer small, auditable diffs that are easy to rebase or replay during upstream sync.
-- Treat upstream behavior, public MCP/tool contracts, config semantics, and user-visible workflows as the default.
+- `docs/UPSTREAM-SYNC.md` is the source of truth for upstream intake work; read it before doing any sync work.
+- Keep this fork close to upstream `nicobailon/pi-mcp-adapter`, but use a non-rebase intake model: review upstream by release/tag or coherent feature cluster, then integrate via an explicit merge PR or squash-import PR.
+- Record each intake in `.upstream-ledger.jsonl`; treat the git DAG plus that ledger as authoritative over patch-id/cherry heuristics.
+- Re-verify deliberate fork-only deltas listed in `docs/tlh-patch-inventory.md` after every upstream intake.
+- Treat upstream behavior, public MCP/tool contracts, config semantics, and user-visible workflows as the default unless a recorded fork delta or approved ticket says otherwise.
 - Add TLH-specific behavior only when required for compatibility, release/distribution, safety, or clearly approved fork needs.
 - Avoid speculative refactors while the fork carries local deltas.
+- Do not reintroduce rebase/replay-on-top sync guidance into this repository.
 
 ## Important TLH / MCP adapter hotspots
 

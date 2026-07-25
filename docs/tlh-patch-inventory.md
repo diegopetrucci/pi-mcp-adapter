@@ -1,0 +1,9 @@
+# TLH Patch Inventory
+
+This table records the deliberate fork-only deltas that must survive future upstream intakes for `diegopetrucci/pi-mcp-adapter`. Read [`docs/UPSTREAM-SYNC.md`](./UPSTREAM-SYNC.md) first.
+
+| Delta | Why | Key files | Tests | Re-verify on intake? |
+| --- | --- | --- | --- | --- |
+| Dim connected-server footer in MCP status UI | TLH intentionally dims the MCP footer and appends the names of actually connected servers so the status line matches the rest of the footer styling and is easier to scan. This is a fork presentation delta, not an upstream behavior contract. | `init.ts` | No focused footer/status-bar test currently; coverage gap to keep in mind during intake review. | yes |
+| Lazy startup facade / heavy runtime boundary | TLH split startup into a lightweight facade and a heavier runtime module so command registration, proxy tool registration, and direct-tool cache behavior stay cheap at startup without changing runtime semantics. Upstream intakes touching bootstrap or tool registration need an explicit boundary check. | `startup-mcp-facade.ts`, `mcp-runtime.ts`, `index.ts`, `direct-tools.ts` | `__tests__/startup-mcp-facade.test.ts`, `__tests__/mcp-runtime.test.ts`, `__tests__/index-lifecycle.test.ts`, `__tests__/direct-tools.test.ts` | yes |
+| Scoped package identity and trusted-publishing release path | This fork is distributed for tlh as `@diegopetrucci/pi-mcp-adapter`, with npm trusted publishing documented and wired for the fork. Upstream syncs must not silently revert package identity, publish metadata, or the release workflow. | `package.json`, `.github/workflows/release.yml`, `README.md`, `CHANGELOG.md` | `__tests__/package-manifest.test.ts` provides partial manifest coverage (published runtime files only); scoped package identity and trusted-publishing configuration require manual re-verification. | yes |
