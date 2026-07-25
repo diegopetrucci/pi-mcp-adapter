@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added maintainer upstream-intake policy docs: `docs/UPSTREAM-SYNC.md`, `.upstream-ledger.jsonl`, and `docs/tlh-patch-inventory.md`, establishing the fork's non-rebase merge/squash-import workflow without adopting upstream `v2.11.0` or changing runtime behavior.
+
 ## [2.10.2] - 2026-07-08
 
 ### Added

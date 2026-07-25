@@ -26,6 +26,8 @@ pi install npm:@diegopetrucci/pi-mcp-adapter@2.10.2
 
 TLH automation should use this exact pinned install target. This fork's published package exists to support that bundled tlh integration rather than serve as a general-purpose standalone release channel.
 
+Maintainer note: upstream intake policy for this fork lives in [`docs/UPSTREAM-SYNC.md`](./docs/UPSTREAM-SYNC.md), with fork-only delta tracking in [`docs/tlh-patch-inventory.md`](./docs/tlh-patch-inventory.md).
+
 Restart Pi after installation.
 
 ## What happens on first run
