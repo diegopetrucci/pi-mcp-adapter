@@ -407,7 +407,10 @@ export class McpServerManager {
     try {
       this.touch(name);
       this.incrementInFlight(name);
-      return await connection.client.readResource({ uri }, this.getRequestOptions(name, signal));
+      return await abortable(
+        connection.client.readResource({ uri }, this.getRequestOptions(name, signal)),
+        signal,
+      );
     } finally {
       this.decrementInFlight(name);
       this.touch(name);

@@ -364,7 +364,7 @@ describe("proxy auto auth", () => {
       undefined,
       requestOptions,
     );
-    expect(result.details).toMatchObject({ error: "call_failed", message: "request aborted" });
+    expect(result.details).toMatchObject({ error: "aborted", message: "request aborted" });
     expect(result.content[0].text).toContain("request aborted");
   });
 

@@ -107,10 +107,11 @@ describe("direct tools auto auth", () => {
     const controller = new AbortController();
 
     const requestOptions = { signal: controller.signal, timeout: 4321 };
+    const callTool = vi.fn(() => new Promise<never>(() => {}));
     const connection = {
       status: "connected",
       client: {
-        callTool: vi.fn(() => new Promise<never>(() => {})),
+        callTool,
       },
     };
     const state = {
@@ -135,7 +136,9 @@ describe("direct tools auto auth", () => {
     });
 
     const inFlight = executor("id", {}, controller.signal, undefined, undefined as any);
-    await Promise.resolve();
+    await vi.waitFor(() => {
+      expect(callTool).toHaveBeenCalledTimes(1);
+    });
     controller.abort(new Error("request aborted"));
 
     const result = await inFlight;

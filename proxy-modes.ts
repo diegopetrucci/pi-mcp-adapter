@@ -842,7 +842,10 @@ export async function executeCall(
     state.manager.incrementInFlight(serverName);
 
     if (toolMeta.resourceUri) {
-      const result = await connection.client.readResource({ uri: toolMeta.resourceUri }, requestOptions);
+      const result = await abortable(
+        connection.client.readResource({ uri: toolMeta.resourceUri }, requestOptions),
+        signal,
+      );
       const content = (result.contents ?? []).map(c => ({
         type: "text" as const,
         text: "text" in c ? c.text : ("blob" in c ? `[Binary data: ${(c as { mimeType?: string }).mimeType ?? "unknown"}]` : JSON.stringify(c)),
@@ -939,7 +942,12 @@ export async function executeCall(
 
     return {
       content: guarded.content,
-      details: { mode: "call", error: "call_failed", message: guarded.outputGuard ? "output truncated; see outputGuard.fullOutputPath" : message, ...guardedMcpDetails(guarded) },
+      details: {
+        mode: "call",
+        error: signal?.aborted ? "aborted" : "call_failed",
+        message: guarded.outputGuard ? "output truncated; see outputGuard.fullOutputPath" : message,
+        ...guardedMcpDetails(guarded),
+      },
     };
   } finally {
     if (uiSession?.reused) {

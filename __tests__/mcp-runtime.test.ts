@@ -66,10 +66,12 @@ vi.mock("../proxy-modes.ts", () => ({
 
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
+  let reject!: (error?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
     resolve = res;
+    reject = rej;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function createState() {
@@ -258,6 +260,40 @@ describe("mcp runtime", () => {
     expect(mocks.executeSearch).toHaveBeenCalledWith(state, "demo", true, "demo", false);
     expect(mocks.executeList).toHaveBeenCalledWith(state, "demo");
     expect(mocks.executeStatus).toHaveBeenCalledWith(state);
+  });
+
+  it("rethrows proxy-tool cancellation while initialization is still pending", async () => {
+    const pendingInit = createDeferred<any>();
+    mocks.initializeMcp.mockReturnValue(pendingInit.promise);
+
+    const { createMcpRuntime } = await import("../mcp-runtime.ts");
+    const runtime = createMcpRuntime(createPi(), {});
+
+    await runtime.handleSessionStart({}, {} as any);
+
+    const controller = new AbortController();
+    const resultPromise = runtime.executeProxyTool("call-1", { tool: "demo_search" }, controller.signal);
+    await Promise.resolve();
+    controller.abort(new Error("user cancelled"));
+
+    await expect(resultPromise).rejects.toThrow("user cancelled");
+  });
+
+  it("returns init_failed for genuine proxy-tool initialization failures", async () => {
+    const pendingInit = createDeferred<any>();
+    mocks.initializeMcp.mockReturnValue(pendingInit.promise);
+
+    const { createMcpRuntime } = await import("../mcp-runtime.ts");
+    const runtime = createMcpRuntime(createPi(), {});
+
+    await runtime.handleSessionStart({}, {} as any);
+
+    const resultPromise = runtime.executeProxyTool("call-1", { tool: "demo_search" });
+    pendingInit.reject(new Error("boom"));
+
+    await expect(resultPromise).resolves.toMatchObject({
+      details: { error: "init_failed", message: "boom" },
+    });
   });
 
   it("delegates direct tool execution to createDirectToolExecutor with runtime state accessors", async () => {

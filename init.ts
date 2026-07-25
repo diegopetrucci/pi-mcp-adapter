@@ -138,6 +138,7 @@ export async function initializeMcp(
       }
       return { name, definition, connection, error: null };
     } catch (error) {
+      throwIfAborted(ctx.signal);
       const message = error instanceof Error ? error.message : String(error);
       return { name, definition, connection: null, error: message };
     }
@@ -195,6 +196,7 @@ export async function initializeMcp(
             updateMetadataCache(state, name);
             return { name, ok: true };
           } catch (error) {
+            throwIfAborted(ctx.signal);
             const message = error instanceof Error ? error.message : String(error);
             logger.debug(`MCP: direct-tools bootstrap failed for ${name}: ${message}`);
             return { name, ok: false };

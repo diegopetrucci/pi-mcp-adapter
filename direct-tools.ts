@@ -164,7 +164,10 @@ export function createDirectToolExecutor(
       state.manager.incrementInFlight(spec.serverName);
 
       if (spec.resourceUri) {
-        const result = await connection.client.readResource({ uri: spec.resourceUri }, requestOptions);
+        const result = await abortable(
+          connection.client.readResource({ uri: spec.resourceUri }, requestOptions),
+          signal,
+        );
         const content = (result.contents ?? []).map(c => ({
           type: "text" as const,
           text: "text" in c ? c.text : ("blob" in c ? `[Binary data: ${(c as { mimeType?: string }).mimeType ?? "unknown"}]` : JSON.stringify(c)),

@@ -31,6 +31,7 @@ import {
   executeUiMessages,
 } from "./proxy-modes.ts";
 import { initializeOAuth, shutdownOAuth } from "./mcp-auth-flow.ts";
+import { abortable, throwIfAborted } from "./abort.ts";
 
 export interface McpRuntime {
   handleSessionStart(event: unknown, ctx: ExtensionContext): Promise<void>;
@@ -275,8 +276,9 @@ export function createMcpRuntime(
 
       if (!state && initPromise) {
         try {
-          state = await initPromise;
+          state = await abortable(initPromise, signal);
         } catch (error) {
+          throwIfAborted(signal);
           const message = error instanceof Error ? error.message : String(error);
           return {
             content: [{ type: "text" as const, text: `MCP initialization failed: ${message}` }],

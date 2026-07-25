@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
+
+const cliPath = fileURLToPath(new URL("../cli.js", import.meta.url));
 
 function writeJson(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
@@ -90,7 +93,7 @@ describe("cli init helper", () => {
     const home = mkdtempSync(join(tmpdir(), "pi-mcp-cli-home-"));
     const binDir = mkdtempSync(join(tmpdir(), "pi-mcp-cli-bin-"));
     const symlinkPath = join(binDir, "pi-mcp-adapter");
-    symlinkSync(resolve("cli.js"), symlinkPath);
+    symlinkSync(cliPath, symlinkPath);
 
     const result = spawnSync(process.execPath, [symlinkPath, "init", "--dry-run"], {
       cwd: mkdtempSync(join(tmpdir(), "pi-mcp-cli-project-")),

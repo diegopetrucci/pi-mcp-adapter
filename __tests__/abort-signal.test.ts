@@ -76,6 +76,36 @@ describe("AbortSignal propagation", () => {
     expect(state.manager.decrementInFlight).toHaveBeenCalledWith("demo");
   });
 
+  it("direct resource reads settle hanging MCP SDK reads on abort", async () => {
+    const controller = new AbortController();
+    const readResource = vi.fn(() => new Promise<never>(() => {}));
+    const state = connectedState({ readResource });
+    const execute = createDirectToolExecutor(
+      () => state,
+      () => null,
+      {
+        serverName: "demo",
+        originalName: "resource",
+        prefixedName: "demo_resource",
+        description: "Demo resource",
+        resourceUri: "resource://demo",
+      },
+    );
+
+    const inFlight = execute("call-1", {}, controller.signal, undefined, {} as any);
+    await Promise.resolve();
+    controller.abort(new Error("user cancelled"));
+
+    const result = await inFlight;
+    expect(result.details.error).toBe("call_failed");
+    expect(result.content[0].text).toContain("Failed to call tool: user cancelled");
+    expect(readResource).toHaveBeenCalledWith(
+      { uri: "resource://demo" },
+      { signal: controller.signal },
+    );
+    expect(state.manager.decrementInFlight).toHaveBeenCalledWith("demo");
+  });
+
   it("proxy tool calls pass AbortSignal to MCP callTool and settle if the MCP SDK promise hangs", async () => {
     const controller = new AbortController();
     const callTool = vi.fn(() => new Promise<never>(() => {}));
@@ -87,7 +117,7 @@ describe("AbortSignal propagation", () => {
 
     const result = await inFlight;
     expect(result.content[0].text).toContain("Failed to call tool: user cancelled");
-    expect(result.details.error).toBe("call_failed");
+    expect(result.details.error).toBe("aborted");
     expect(callTool).toHaveBeenCalledWith(
       { name: "slow", arguments: {}, _meta: undefined },
       undefined,
@@ -172,5 +202,69 @@ describe("AbortSignal propagation", () => {
       { uri: "resource://demo" },
       { signal: controller.signal },
     );
+  });
+
+  it("server-manager readResource settles hanging MCP SDK reads on abort and preserves in-flight cleanup", async () => {
+    const controller = new AbortController();
+    const readResource = vi.fn(() => new Promise<never>(() => {}));
+    const manager = new McpServerManager({} as any);
+    const touch = vi.spyOn(manager, "touch");
+    const increment = vi.spyOn(manager, "incrementInFlight");
+    const decrement = vi.spyOn(manager, "decrementInFlight");
+    (manager as any).connections.set("demo", {
+      status: "connected",
+      client: { readResource },
+      inFlight: 0,
+      lastUsedAt: 0,
+    });
+
+    const inFlight = manager.readResource("demo", "resource://demo", controller.signal);
+    await Promise.resolve();
+    controller.abort(new Error("user cancelled"));
+
+    await expect(inFlight).rejects.toThrow("user cancelled");
+    expect(readResource).toHaveBeenCalledWith(
+      { uri: "resource://demo" },
+      { signal: controller.signal },
+    );
+    expect(increment).toHaveBeenCalledWith("demo");
+    expect(decrement).toHaveBeenCalledWith("demo");
+    expect(touch).toHaveBeenCalledWith("demo");
+  });
+
+  it("proxy resource reads settle hanging MCP SDK reads on abort", async () => {
+    const controller = new AbortController();
+    const readResource = vi.fn(() => new Promise<never>(() => {}));
+    const state = connectedState({ readResource });
+    state.toolMetadata.set("demo", [{
+      name: "demo_resource",
+      originalName: "resource",
+      description: "Demo resource",
+      resourceUri: "resource://demo",
+    }]);
+
+    const inFlight = executeCall(state, "demo_resource", {}, undefined, undefined, controller.signal);
+    await Promise.resolve();
+    controller.abort(new Error("user cancelled"));
+
+    const result = await inFlight;
+    expect(result.details.error).toBe("aborted");
+    expect(readResource).toHaveBeenCalledWith(
+      { uri: "resource://demo" },
+      { signal: controller.signal },
+    );
+    expect(state.manager.decrementInFlight).toHaveBeenCalledWith("demo");
+  });
+
+  it("proxy tool failures remain call_failed when the signal was not aborted", async () => {
+    const callTool = vi.fn(async () => {
+      throw new Error("boom");
+    });
+    const state = connectedState({ callTool });
+
+    const result = await executeCall(state, "demo_slow", {});
+
+    expect(result.details.error).toBe("call_failed");
+    expect(result.content[0].text).toContain("Failed to call tool: boom");
   });
 });
