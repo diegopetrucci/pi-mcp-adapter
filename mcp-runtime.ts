@@ -256,7 +256,7 @@ export function createMcpRuntime(
       await authenticateServer(serverName, currentState.config, ctx);
     },
 
-    async executeProxyTool(_toolCallId, params) {
+    async executeProxyTool(_toolCallId, params, signal) {
       let parsedArgs: Record<string, unknown> | undefined;
       if (params.args) {
         try {
@@ -320,10 +320,10 @@ export function createMcpRuntime(
         return executeAuthComplete(state, params.server, input);
       }
       if (params.tool) {
-        return executeCall(state, params.tool, parsedArgs, params.server, () => pi.getAllTools());
+        return executeCall(state, params.tool, parsedArgs, params.server, () => pi.getAllTools(), signal);
       }
       if (params.connect) {
-        return executeConnect(state, params.connect);
+        return executeConnect(state, params.connect, signal);
       }
       if (params.describe) {
         return executeDescribe(state, params.describe);

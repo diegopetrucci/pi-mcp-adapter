@@ -2,13 +2,14 @@ import { Type } from "typebox";
 import type { DirectToolSpec, McpConfig } from "./types.ts";
 import type { MetadataCache } from "./metadata-cache.ts";
 import { isServerCacheValid } from "./metadata-cache.ts";
-import { formatToolName, isToolExcluded } from "./types.ts";
 import { resourceNameToToolName } from "./resource-tools.ts";
 import {
   createMcpDirectToolCallRenderer,
   renderMcpProxyToolCall,
   renderMcpToolResult,
 } from "./tool-result-renderer.ts";
+import { formatToolName, isToolExcluded } from "./types.ts";
+import { normalizeDirectToolInputSchema } from "./utils.ts";
 
 const BUILTIN_NAMES = new Set(["read", "bash", "edit", "write", "grep", "find", "ls", "mcp"]);
 
@@ -201,7 +202,7 @@ export function buildProxyDescription(
 }
 
 export function getDirectToolParametersSchema(spec: Pick<DirectToolSpec, "inputSchema">) {
-  return Type.Unsafe((spec.inputSchema || { type: "object", properties: {} }) as never);
+  return Type.Unsafe(normalizeDirectToolInputSchema(spec.inputSchema) as never);
 }
 
 export const MCP_PROXY_TOOL_PARAMETERS_SCHEMA = Type.Object({

@@ -1,6 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadMcpConfig } from "./config.ts";
+import { toolErrorOverride } from "./error-signal.ts";
 import { loadMetadataCache } from "./metadata-cache.ts";
+import type { McpRuntime } from "./mcp-runtime.ts";
 import {
   buildProxyDescription,
   createMcpDirectToolCallRenderer,
@@ -11,7 +13,6 @@ import {
   renderMcpToolResult,
   resolveDirectTools,
 } from "./startup-mcp-facade.ts";
-import type { McpRuntime } from "./mcp-runtime.ts";
 import { getConfigPathFromArgv, truncateAtWord } from "./utils.ts";
 
 function shouldInitializeRuntimeOnSessionStart(
@@ -152,6 +153,8 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     const runtime = await runtimePromise;
     await runtime.handleSessionShutdown();
   });
+
+  pi.on("tool_result", (event) => toolErrorOverride(event.details));
 
   pi.registerCommand("mcp", {
     description: "Show MCP server status",

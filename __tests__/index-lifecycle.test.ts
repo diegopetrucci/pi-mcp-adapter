@@ -585,4 +585,17 @@ describe("index facade lifecycle", () => {
     expect(api.registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: "demo_search" }));
     expect(api.registerTool).not.toHaveBeenCalledWith(expect.objectContaining({ name: "mcp" }));
   });
+
+  it("registers a tool_result handler that re-flags returned MCP tool failures", async () => {
+    const mcpAdapter = await importFacade();
+    const { api, handlers } = createPi();
+    mcpAdapter(api);
+
+    const toolResult = handlers.get("tool_result");
+    expect(toolResult).toBeDefined();
+    expect(toolResult?.({ details: { error: "tool_error", server: "demo" } })).toEqual({ isError: true });
+    expect(toolResult?.({ details: { mode: "call", error: "call_failed", message: "boom" } })).toEqual({ isError: true });
+    expect(toolResult?.({ details: { error: "auth_required", server: "demo" } })).toBeUndefined();
+  });
+
 });
