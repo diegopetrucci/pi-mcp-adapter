@@ -21,7 +21,7 @@ But the MCP ecosystem has useful stuff - databases, browsers, APIs. This adapter
 ## Install
 
 ```bash
-pi install npm:@diegopetrucci/pi-mcp-adapter@2.10.2
+pi install npm:@diegopetrucci/pi-mcp-adapter@2.11.0
 ```
 
 TLH automation should use this exact pinned install target. This fork's published package exists to support that bundled tlh integration rather than serve as a general-purpose standalone release channel.
