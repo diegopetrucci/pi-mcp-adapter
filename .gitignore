@@ -1,5 +1,24 @@
 node_modules/
-.pi/
+.pi/*
+!.pi/skills/
+.pi/skills/*
+!.pi/skills/visual-explainer/
+.pi/skills/visual-explainer/*
+!.pi/skills/visual-explainer/SKILL.md
+!.pi/skills/visual-explainer/LICENSE
+!.pi/skills/visual-explainer/PROVENANCE.md
+!.pi/skills/visual-explainer/references/
+.pi/skills/visual-explainer/references/*
+!.pi/skills/visual-explainer/references/css-patterns.md
+!.pi/skills/visual-explainer/references/libraries.md
+!.pi/skills/visual-explainer/references/responsive-nav.md
+!.pi/skills/visual-explainer/references/slide-patterns.md
+!.pi/skills/visual-explainer/templates/
+.pi/skills/visual-explainer/templates/*
+!.pi/skills/visual-explainer/templates/architecture.html
+!.pi/skills/visual-explainer/templates/data-table.html
+!.pi/skills/visual-explainer/templates/mermaid-flowchart.html
+!.pi/skills/visual-explainer/templates/slide-deck.html
 *.log
 .DS_Store
 
