@@ -232,7 +232,7 @@ describe("excludeTools filtering", () => {
     const definition = {
       command: "npx",
       args: ["-y", "figma"],
-      excludeTools: ["figma_get_screenshot", "get_figjam"],
+      excludeTools: ["figma_get_screenshot", "read_figjam"],
     };
 
     const { metadata } = buildToolMetadata(

@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import type { DirectToolSpec, McpConfig } from "./types.ts";
+import type { DirectToolSpec, McpConfig, ToolPrefix } from "./types.ts";
 import type { MetadataCache } from "./metadata-cache.ts";
 import { isServerCacheValid } from "./metadata-cache.ts";
 import { resourceNameToToolName } from "./resource-tools.ts";
@@ -16,7 +16,7 @@ const BUILTIN_NAMES = new Set(["read", "bash", "edit", "write", "grep", "find", 
 export function resolveDirectTools(
   config: McpConfig,
   cache: MetadataCache | null,
-  prefix: "server" | "none" | "short",
+  prefix: ToolPrefix,
   envOverride?: string[],
   defaultCwd?: string,
 ): DirectToolSpec[] {
@@ -59,8 +59,10 @@ export function resolveDirectTools(
         toolFilter = [...envTools.get(serverName)!];
       }
     } else if (definition.directTools !== undefined) {
+      if (definition.directTools === "search") continue;
       toolFilter = definition.directTools;
     } else if (globalDirect) {
+      if (globalDirect === "search") continue;
       toolFilter = globalDirect;
     }
 
@@ -84,9 +86,9 @@ export function resolveDirectTools(
         originalName: tool.name,
         prefixedName,
         description: tool.description ?? "",
-        inputSchema: tool.inputSchema,
-        uiResourceUri: tool.uiResourceUri,
-        uiStreamMode: tool.uiStreamMode,
+        ...(tool.inputSchema !== undefined ? { inputSchema: tool.inputSchema } : {}),
+        ...(tool.uiResourceUri !== undefined ? { uiResourceUri: tool.uiResourceUri } : {}),
+        ...(tool.uiStreamMode !== undefined ? { uiStreamMode: tool.uiStreamMode } : {}),
       });
     }
 
@@ -167,12 +169,12 @@ export function buildProxyDescription(
     const entry = cache?.servers?.[serverName];
     const definition = config.mcpServers[serverName];
     const toolCount = (entry?.tools ?? []).filter(
-      (tool) => !isToolExcluded(tool.name, serverName, prefix, definition.excludeTools),
+      (tool) => !isToolExcluded(tool.name, serverName, prefix, definition?.excludeTools),
     ).length;
     const resourceCount = definition?.exposeResources !== false
       ? (entry?.resources ?? []).filter((resource) => {
           const baseName = `get_${resourceNameToToolName(resource.name)}`;
-          return !isToolExcluded(baseName, serverName, prefix, definition.excludeTools);
+          return !isToolExcluded(baseName, serverName, prefix, definition?.excludeTools);
         }).length
       : 0;
     const totalItems = toolCount + resourceCount;

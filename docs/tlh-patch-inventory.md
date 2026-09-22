@@ -15,3 +15,10 @@ This table records the deliberate fork-only deltas that must survive future upst
 - Lazy startup facade / heavy runtime boundary: re-walked via `npx vitest run __tests__/startup-mcp-facade.test.ts __tests__/mcp-runtime.test.ts __tests__/index-lifecycle.test.ts __tests__/direct-tools.test.ts`; the lightweight facade, deferred runtime loading, and direct-tool/runtime delegation all still pass.
 - Scoped package identity and trusted-publishing release path: re-walked via `npx vitest run __tests__/package-manifest.test.ts` plus an out-of-repo `npm pack --json --pack-destination "$TMPDIR"` inspection; the tarball still reports `@diegopetrucci/pi-mcp-adapter@2.10.2` and includes every manifest-declared runtime file.
 - URL-bound auth merge hardening (post-v2.11 backport): re-walked via `npx vitest run __tests__/config.test.ts`; the higher-precedence URL/auth merge guard and `oauth: false` preservation still pass.
+
+## v2.36.0 final intake walk
+
+- Dim connected-server footer in MCP status UI: retained in `init.ts`; `__tests__/init-status-bar.test.ts` and the compatible upstream `__tests__/init-status.test.ts` pass with the dim connected-name presentation.
+- Lazy startup facade / heavy runtime boundary: retained the HEAD `index.ts` facade, `startup-mcp-facade.ts`, and `mcp-runtime.ts`; `__tests__/startup-mcp-facade.test.ts`, `__tests__/mcp-runtime.test.ts`, `__tests__/index-lifecycle.test.ts`, and `__tests__/direct-tools.test.ts` pass. Upstream index-wired lifecycle integration remains deferred to pma-avxx.
+- Scoped package identity and trusted-publishing release path: retained `@diegopetrucci/pi-mcp-adapter@2.11.0`, the exact README pin, and OIDC release workflow; `__tests__/package-manifest.test.ts` passes after regenerating the lockfile from the resolved scoped manifest.
+- URL-bound auth merge hardening: retained and extended through upstream v2.36 transport/auth fields; `__tests__/config.test.ts` passes, including the URL repoint and `oauth: false` regressions.

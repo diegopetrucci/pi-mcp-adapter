@@ -1,4 +1,5 @@
 node_modules/
+dist/
 .pi/*
 !.pi/skills/
 .pi/skills/*
@@ -19,8 +20,13 @@ node_modules/
 !.pi/skills/visual-explainer/templates/data-table.html
 !.pi/skills/visual-explainer/templates/mermaid-flowchart.html
 !.pi/skills/visual-explainer/templates/slide-deck.html
+conformance/results/
 *.log
 .DS_Store
+
+# This package uses npm/package-lock.json.
+bun.lock
+bun.lockb
 
 progress.md
 worker-summary.md

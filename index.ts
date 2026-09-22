@@ -1,8 +1,11 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { AgentToolUpdateCallback, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadMcpConfig } from "./config.ts";
 import { toolErrorOverride } from "./error-signal.ts";
 import { loadMetadataCache } from "./metadata-cache.ts";
 import type { McpRuntime } from "./mcp-runtime.ts";
+
+type ProxyToolParams = Parameters<McpRuntime["executeProxyTool"]>[1];
+type ToolUpdate = AgentToolUpdateCallback<Record<string, unknown>>;
 import {
   buildProxyDescription,
   createMcpDirectToolCallRenderer,
@@ -60,7 +63,7 @@ export default function mcpAdapter(pi: ExtensionAPI) {
   const loadRuntime = () => {
     if (!runtimePromise) {
       runtimePromise = import("./mcp-runtime.ts").then(({ createMcpRuntime }) => (
-        createMcpRuntime(pi, { earlyConfigPath })
+        createMcpRuntime(pi, earlyConfigPath === undefined ? {} : { earlyConfigPath })
       ));
     }
     return runtimePromise;
@@ -100,7 +103,13 @@ export default function mcpAdapter(pi: ExtensionAPI) {
       description: spec.description || "(no description)",
       promptSnippet: truncateAtWord(spec.description, 100) || `MCP tool from ${spec.serverName}`,
       parameters: getDirectToolParametersSchema(spec),
-      execute: async (toolCallId, params, signal, onUpdate, ctx) => {
+      execute: async (
+        toolCallId: string,
+        params: Record<string, unknown>,
+        signal: AbortSignal | undefined,
+        onUpdate: ToolUpdate | undefined,
+        ctx: ExtensionContext,
+      ) => {
         const runtime = await ensureRuntimeStarted();
         return runtime.executeDirectTool(spec, toolCallId, params, signal, onUpdate, ctx);
       },
@@ -186,7 +195,13 @@ export default function mcpAdapter(pi: ExtensionAPI) {
       renderCall: renderMcpProxyToolCall,
       parameters: MCP_PROXY_TOOL_PARAMETERS_SCHEMA,
       renderResult: renderMcpToolResult,
-      async execute(toolCallId, params, signal, onUpdate, ctx) {
+      async execute(
+        toolCallId: string,
+        params: ProxyToolParams,
+        signal: AbortSignal | undefined,
+        onUpdate: ToolUpdate | undefined,
+        ctx: ExtensionContext,
+      ) {
         const runtime = await ensureRuntimeStarted();
         return runtime.executeProxyTool(toolCallId, params, signal, onUpdate, ctx);
       },
