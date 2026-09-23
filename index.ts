@@ -535,6 +535,7 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     ctx: ExtensionContext,
     initial: boolean,
     helpers: McpRuntimeSurfaceHelpers,
+    options: { forceDirectTools?: boolean } = {},
   ): void {
     activeRuntimeState = state;
     activeSurfaceContext = ctx;
@@ -543,7 +544,7 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     syncScriptToolFor(state.config);
     syncPromptCommands(state, state.config, state.sessionCwd);
     const directToolsFrozen = state.config.settings?.freezeDirectTools !== false;
-    if (initial || !directToolsFrozen) syncDirectTools(state);
+    if (initial || options.forceDirectTools === true || !directToolsFrozen) syncDirectTools(state);
     deliverLargeDirectToolsAdvisory(ctx, state.config);
 
     const unavailableServers = new Set(

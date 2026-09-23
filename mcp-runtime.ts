@@ -58,6 +58,7 @@ export interface McpRuntimeSurface {
     ctx: ExtensionContext,
     initial: boolean,
     helpers: McpRuntimeSurfaceHelpers,
+    options?: { forceDirectTools?: boolean },
   ): void | Promise<void>;
   activateSearchMatches(matches: ReadonlyArray<{ server: string; tool: string }>): void;
 }
@@ -208,6 +209,30 @@ export function createMcpRuntime(
       executeCall(currentState, toolName, args, serverName, getPiTools, signal, origin)
     ),
   });
+
+  function isCurrentState(currentState: McpExtensionState, generation: number): boolean {
+    return state === currentState && lifecycleGeneration === generation;
+  }
+
+  async function applyDirectToolsConfigChanges(
+    currentState: McpExtensionState,
+    generation: number,
+    ctx: ExtensionContext,
+    changes: Map<string, true | string[] | false>,
+  ): Promise<void> {
+    // Panel persistence happens before this callback. Re-check the runtime
+    // identity so a panel from a replaced session cannot mutate its successor.
+    if (!isCurrentState(currentState, generation)) return;
+    for (const [serverName, directTools] of changes) {
+      const definition = currentState.config.mcpServers[serverName];
+      if (!definition) continue;
+      definition.directTools = directTools;
+    }
+    if (!isCurrentState(currentState, generation) || !toolSurface) return;
+    // This is an explicit user-requested refresh, so it must bypass the
+    // passive freeze that protects the prompt cache from metadata callbacks.
+    await toolSurface.sync(currentState, ctx, false, surfaceHelpers(), { forceDirectTools: true });
+  }
 
   return {
     async handleSessionStart(_event, ctx) {
@@ -368,7 +393,14 @@ export function createMcpRuntime(
         case "":
         default:
           if (ctx.hasUI) {
-            const result = await openMcpPanel(currentState, pi, ctx, earlyConfigPath);
+            const panelGeneration = lifecycleGeneration;
+            const result = await openMcpPanel(
+              currentState,
+              pi,
+              ctx,
+              earlyConfigPath,
+              (changes) => applyDirectToolsConfigChanges(currentState, panelGeneration, ctx, changes),
+            );
             if (result?.configChanged) {
               await ctx.reload();
               return;

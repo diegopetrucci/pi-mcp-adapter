@@ -201,7 +201,7 @@ describe("mcp runtime", () => {
     expect(mocks.editSharedConfig).toHaveBeenNthCalledWith(1, ctx, "project");
     expect(mocks.editSharedConfig).toHaveBeenNthCalledWith(2, ctx, "global");
     expect(mocks.logoutServer).toHaveBeenCalledWith("oauth-server", state, ctx);
-    expect(mocks.openMcpPanel).toHaveBeenCalledWith(state, expect.any(Object), ctx, "/tmp/mcp.json");
+    expect(mocks.openMcpPanel).toHaveBeenCalledWith(state, expect.any(Object), ctx, "/tmp/mcp.json", expect.any(Function));
   });
 
   it("routes mcp-auth commands through the existing auth handlers", async () => {
@@ -221,6 +221,69 @@ describe("mcp runtime", () => {
 
     expect(mocks.openMcpAuthPanel).toHaveBeenCalledWith(state, expect.any(Object), ctx, "/tmp/mcp.json");
     expect(mocks.authenticateServer).toHaveBeenCalledWith("github", state.config, ctx);
+  });
+
+  it("refreshes direct tools after a persisted panel change even when direct tools are frozen", async () => {
+    const state = createState();
+    state.config = {
+      settings: { freezeDirectTools: true },
+      mcpServers: { demo: { command: "demo", directTools: false } },
+    };
+    mocks.initializeMcp.mockResolvedValue(state);
+    const sync = vi.fn();
+    const toolSurface = { sync, activateSearchMatches: vi.fn() };
+    let applyChanges!: (changes: Map<string, true | string[] | false>) => void | Promise<void>;
+    mocks.openMcpPanel.mockImplementation(async (...args: any[]) => {
+      applyChanges = args[4];
+      return { configChanged: false };
+    });
+
+    const { createMcpRuntime } = await import("../mcp-runtime.ts");
+    const runtime = createMcpRuntime(createPi(), { toolSurface });
+    const ctx = { hasUI: true, ui: { notify: vi.fn() } } as any;
+
+    await runtime.handleSessionStart({}, ctx);
+    await runtime.waitForInitialization?.();
+    await runtime.handleMcpCommand("", ctx);
+
+    expect(applyChanges).toBeTypeOf("function");
+    await applyChanges(new Map([["demo", ["search"]]]));
+
+    expect(state.config.mcpServers.demo.directTools).toEqual(["search"]);
+    expect(sync).toHaveBeenNthCalledWith(2, state, ctx, false, expect.any(Object), { forceDirectTools: true });
+  });
+
+  it("ignores a panel refresh callback after the runtime session is replaced", async () => {
+    const firstState = createState();
+    firstState.config = { mcpServers: { demo: { command: "demo", directTools: false } } };
+    const replacementState = createState();
+    replacementState.config = { mcpServers: { demo: { command: "demo", directTools: false } } };
+    mocks.initializeMcp.mockResolvedValueOnce(firstState).mockResolvedValueOnce(replacementState);
+    const sync = vi.fn();
+    let staleApply!: (changes: Map<string, true | string[] | false>) => void | Promise<void>;
+    mocks.openMcpPanel.mockImplementationOnce(async (...args: any[]) => {
+      staleApply = args[4];
+      return { configChanged: false };
+    });
+
+    const { createMcpRuntime } = await import("../mcp-runtime.ts");
+    const runtime = createMcpRuntime(createPi(), {
+      toolSurface: { sync, activateSearchMatches: vi.fn() },
+    });
+    const firstCtx = { hasUI: true, ui: { notify: vi.fn() } } as any;
+    const replacementCtx = { hasUI: true, ui: { notify: vi.fn() } } as any;
+
+    await runtime.handleSessionStart({}, firstCtx);
+    await runtime.waitForInitialization?.();
+    await runtime.handleMcpCommand("", firstCtx);
+
+    await runtime.handleSessionStart({}, replacementCtx);
+    await runtime.waitForInitialization?.();
+    await staleApply(new Map([["demo", true]]));
+
+    expect(firstState.config.mcpServers.demo.directTools).toBe(false);
+    expect(replacementState.config.mcpServers.demo.directTools).toBe(false);
+    expect(sync).toHaveBeenCalledTimes(2);
   });
 
   it("routes proxy calls through the existing proxy handlers", async () => {

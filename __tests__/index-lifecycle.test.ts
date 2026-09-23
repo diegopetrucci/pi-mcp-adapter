@@ -270,6 +270,74 @@ describe("index facade lifecycle", () => {
     expect(loadMcpConfig).toHaveBeenCalledWith("/tmp/custom-mcp.json", "/repo/enabled");
   });
 
+  it("forces index direct-tool sync for panel refreshes while passive freeze remains intact", async () => {
+    const config = {
+      settings: { freezeDirectTools: true },
+      mcpServers: { demo: { command: "demo", lifecycle: "eager", directTools: false } },
+    };
+    const directSpec = {
+      serverName: "demo",
+      originalName: "search",
+      prefixedName: "demo_search",
+      description: "Search demo",
+    };
+    let resolvedSpecs: any[] = [];
+    const { resolveDirectTools } = mockCommonModules({
+      config,
+      directSpecs: [],
+      loadMcpConfigImpl: () => config,
+      resolveDirectToolsImpl: () => resolvedSpecs,
+    });
+    const runtime = {
+      handleSessionStart: vi.fn().mockResolvedValue(undefined),
+      handleSessionShutdown: vi.fn().mockResolvedValue(undefined),
+      handleMcpCommand: vi.fn().mockResolvedValue(undefined),
+      handleMcpAuthCommand: vi.fn().mockResolvedValue(undefined),
+      executeProxyTool: vi.fn().mockResolvedValue({ content: [] }),
+      executeDirectTool: vi.fn().mockResolvedValue({ content: [] }),
+    };
+    let toolSurface: any;
+    vi.doMock("../mcp-runtime.ts", () => ({
+      createMcpRuntime: vi.fn((_api: unknown, options: any) => {
+        toolSurface = options.toolSurface;
+        return runtime;
+      }),
+    }));
+
+    const mcpAdapter = await importFacade();
+    const { api, handlers } = createPi();
+    trackActiveTools(api);
+    mcpAdapter(api);
+    await handlers.get("session_start")?.({}, { hasUI: false, cwd: "/repo/session" });
+
+    const state = {
+      config,
+      manager: { getConnection: () => undefined },
+      failureTracker: new Map(),
+      promptMetadata: new Map(),
+      sessionCwd: "/repo/session",
+    } as any;
+    const helpers = {
+      getState: () => state,
+      getInitPromise: () => null,
+      ensureState: vi.fn(),
+      getPiTools: () => api.getAllTools(),
+      updateStatusBar: vi.fn(),
+      executeCall: vi.fn(),
+    } as any;
+    const ctx = { hasUI: false, cwd: "/repo/session" } as any;
+    const baselineResolveCalls = resolveDirectTools.mock.calls.length;
+
+    await toolSurface.sync(state, ctx, false, helpers);
+    expect(resolveDirectTools).toHaveBeenCalledTimes(baselineResolveCalls);
+
+    resolvedSpecs = [directSpec];
+    await toolSurface.sync(state, ctx, false, helpers, { forceDirectTools: true });
+
+    expect(resolveDirectTools).toHaveBeenCalledTimes(baselineResolveCalls + 1);
+    expect(api.registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: "demo_search" }));
+  });
+
   it("resets search activation and reactivates direct tools after removal and eager re-addition", async () => {
     const runtime = {
       handleSessionStart: vi.fn().mockResolvedValue(undefined),

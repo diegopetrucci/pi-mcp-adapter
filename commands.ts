@@ -748,6 +748,13 @@ export async function openMcpPanel(
               }
             }
             if (!result.cancelled && result.changes.size > 0) {
+              // Runtime-registered servers have no persisted provenance. The
+              // write layer intentionally skips them; do not refresh their
+              // proxy-only in-memory entries as if the panel had persisted a
+              // directTools override.
+              const persistedChanges = new Map(
+                [...result.changes].filter(([serverName]) => provenanceMap.has(serverName)),
+              );
               try {
                 // Validate all targets before writing so an aliased destination
                 // cannot produce a partial multi-file update.
@@ -760,13 +767,15 @@ export async function openMcpPanel(
                 resolve();
                 return;
               }
-              try {
-                await onDirectToolsConfigChanged?.(result.changes);
-                ctx.ui.notify("Direct tools updated for this session.", "info");
-              } catch (error) {
-                const message = error instanceof Error ? error.message : String(error);
-                ctx.ui.notify(`Direct tools updated, but live refresh failed: ${message}`, "error");
-                configChanged = true;
+              if (persistedChanges.size > 0) {
+                try {
+                  await onDirectToolsConfigChanged?.(persistedChanges);
+                  ctx.ui.notify("Direct tools updated for this session.", "info");
+                } catch (error) {
+                  const message = error instanceof Error ? error.message : String(error);
+                  ctx.ui.notify(`Direct tools updated, but live refresh failed: ${message}`, "error");
+                  configChanged = true;
+                }
               }
             }
             done(undefined);
