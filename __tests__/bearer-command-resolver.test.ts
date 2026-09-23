@@ -21,9 +21,9 @@ describe("BearerCommandResolver", () => {
     writeFileSync(fixture, `
 const fs = require("node:fs");
 const [counter, failMarker, started, completed, delay = "0"] = process.argv.slice(2);
-if (started !== "-") fs.writeFileSync(started, "started");
 const count = fs.existsSync(counter) ? Number(fs.readFileSync(counter, "utf8")) + 1 : 1;
 fs.writeFileSync(counter, String(count));
+if (started !== "-") fs.writeFileSync(started, "started");
 if (failMarker !== "-" && fs.existsSync(failMarker)) process.exit(2);
 setTimeout(() => {
   if (completed !== "-") fs.writeFileSync(completed, "completed");
