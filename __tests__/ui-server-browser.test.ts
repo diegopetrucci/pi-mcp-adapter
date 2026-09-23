@@ -156,7 +156,7 @@ describe("UiServer browser CSP", () => {
       if (chrome) await stopChrome(chrome);
       if (handle) handle.close("browser-test-cleanup");
       if (observer.listening) await closeServer(observer);
-      if (profileDir) await rm(profileDir, { recursive: true, force: true });
+      if (profileDir) await rm(profileDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
   }, 20_000);
 });
