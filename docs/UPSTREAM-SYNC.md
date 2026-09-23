@@ -25,11 +25,13 @@ Each intake should produce:
 - one ledger row in `.upstream-ledger.jsonl`, and
 - patch-inventory updates in `docs/tlh-patch-inventory.md` if a TLH delta was added, removed, or re-verified.
 
+For the v2.36.0 intake, upstream merge `f0fb751243ba9c0ce363312a51b50f7ed1dd2e63` is the upstream intake merge and fork PR #15 merge `ead59f05a7f52878ee4234d5dc9568c361c7a732` is the fork integration merge. The completed annotated tag `tlh-v2.36.0` points to the fork merge, and `@diegopetrucci/pi-mcp-adapter@2.36.0` was published to npm on 2026-09-23 through the trusted GitHub Actions OIDC/provenance workflow.
+
 ## 3. Exception-only ledger plus git DAG are authoritative
 
 **Path:** `.upstream-ledger.jsonl`
 
-The ledger is append-only JSONL, one JSON object per line, one line per intake. Newer entries are appended at the bottom.
+The ledger is JSONL, one JSON object per line, with one record per intake. New intake records append at the bottom; factual corrections amend the existing intake record in place and must not append duplicate rows.
 
 Field schema:
 
@@ -71,7 +73,7 @@ Upstream sync work must preserve the fork's release identity unless a separately
 - `package.json` `name` stays `@diegopetrucci/pi-mcp-adapter`;
 - TLH decides the fork `version`; do not blindly adopt upstream version bumps during intake work;
 - upstream `v*` tags are intake anchors, not fork release tags, and are never published as the fork's identity;
-- this scoped intake uses fork version `2.36.0` and the planned fork tag `tlh-v2.36.0`;
+- this scoped intake uses fork version `2.36.0` and completed fork tag `tlh-v2.36.0` at the fork PR #15 integration merge `ead59f05a7f52878ee4234d5dc9568c361c7a732`;
 - fork releases use `tlh-v*` tags;
 - if an upstream intake adopts a `package-lock.json`, regenerate it from the resolved, scoped fork `package.json` rather than hand-merging the upstream lockfile;
 - fork release/publish workflow remains the trusted-publishing path in `.github/workflows/release.yml`, with dependency installation and public-artifact build before `npm publish --provenance`;

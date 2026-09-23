@@ -7,15 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.36.0] - 2026-09-22
+## [2.36.0] - 2026-09-23
 
-### TLH fork release - 2026-09-22 (adopted-with-exceptions)
+### TLH fork release - 2026-09-23 (adopted-with-exceptions)
 
 > **Inherited upstream history (2.12–2.35):** retained for context only; the URL installer and Jev/TypeSafe integrations are excluded from this fork.
 
-- Releases the fork-owned `@diegopetrucci/pi-mcp-adapter@2.36.0`; the planned Git tag is `tlh-v2.36.0`.
-- Adopts the compatible fixes from released upstream tag `v2.36.0` at `c00e66b5b959f3327ebefddd93fffe8d402694a3` through merge `f0fb751243ba9c0ce363312a51b50f7ed1dd2e63`. The upstream tag is an intake anchor only; TLH owns this fork's version and release identity.
+- The fork-owned `@diegopetrucci/pi-mcp-adapter@2.36.0` was published to npm on 2026-09-23 through the trusted GitHub Actions OIDC/provenance workflow; the completed annotated Git tag `tlh-v2.36.0` points to the fork PR #15 integration merge `ead59f05a7f52878ee4234d5dc9568c361c7a732`.
+- Adopts the compatible fixes from released upstream tag `v2.36.0` at `c00e66b5b959f3327ebefddd93fffe8d402694a3` through the upstream intake merge `f0fb751243ba9c0ce363312a51b50f7ed1dd2e63`. The upstream tag is an intake anchor only; TLH owns this fork's version and release identity.
 - Preserves TLH's lazy facade/runtime boundary, dim connected-server footer, explicit shared-versus-Pi-owned config writes, context-bounded model surface, and trusted OIDC publishing path.
+- Ships explicit `/mcp` panel-save direct-tool reconciliation: persisted user changes bypass `freezeDirectTools` only for this requested refresh, lifecycle fencing ignores callbacks from replaced sessions, persistence provenance prevents runtime-only proxy registrations from being refreshed as persisted, and user-owned active-tool choices remain authoritative.
 - Excludes the upstream model-facing URL installer and Jev/TypeSafe semantic-search integration, including their SDK, source, tests, examples, and generated artifacts.
 - Keeps the exact automation install pin: `pi install npm:@diegopetrucci/pi-mcp-adapter@2.36.0`.
 

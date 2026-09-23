@@ -24,7 +24,7 @@ But the MCP ecosystem has useful stuff - databases, browsers, APIs. This adapter
 pi install npm:@diegopetrucci/pi-mcp-adapter@2.36.0
 ```
 
-TLH automation should use this exact pinned install target. The upstream `v2.36.0` tag is only the intake anchor; this fork's version `2.36.0` and planned `tlh-v2.36.0` tag remain TLH-owned. This fork's published package exists to support bundled tlh integration rather than serve as a general-purpose standalone release channel.
+TLH automation should use this exact pinned install target. The upstream `v2.36.0` tag is only the intake anchor; the completed annotated fork tag `tlh-v2.36.0` points to the fork PR #15 integration merge `ead59f05a7f52878ee4234d5dc9568c361c7a732`, which integrates upstream intake merge `f0fb751243ba9c0ce363312a51b50f7ed1dd2e63`. The fork-owned `@diegopetrucci/pi-mcp-adapter@2.36.0` was published to npm on 2026-09-23 through the trusted GitHub Actions OIDC/provenance workflow. This fork's published package exists to support bundled tlh integration rather than serve as a general-purpose standalone release channel.
 
 Maintainer note: upstream intake policy for this fork lives in [`docs/UPSTREAM-SYNC.md`](./docs/UPSTREAM-SYNC.md), with fork-only delta tracking in [`docs/tlh-patch-inventory.md`](./docs/tlh-patch-inventory.md).
 
