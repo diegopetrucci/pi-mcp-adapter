@@ -2,19 +2,36 @@ import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { buildAllowAttribute } from "@modelcontextprotocol/ext-apps/app-bridge";
-import type {
-  CallToolRequest,
-  CallToolResult,
-} from "@modelcontextprotocol/sdk/types.js";
+import { buildAllowAttribute, getToolUiResourceUri } from "./ui-app-bridge-helpers.ts";
+import {
+  type CallToolRequest,
+  type CallToolResult,
+} from "@modelcontextprotocol/client";
+import { ContentBlockSchema } from "@modelcontextprotocol/core";
 import type { ConsentManager } from "./consent-manager.ts";
 import { ServerError, wrapError } from "./errors.ts";
-import { buildHostHtmlTemplate, buildCspMetaContent, applyCspMeta } from "./host-html-template.ts";
-import { logger } from "./logger.ts";
-import type { McpServerManager } from "./server-manager.ts";
+import { formatAuthRequiredMessage, normalizeToolArguments } from "./utils.ts";
+import { buildHostHtmlTemplate, buildSandboxResourceCsp } from "./host-html-template.ts";
 import {
+  buildSandboxProxyCsp,
+  buildSandboxProxyHtml,
+  SANDBOX_PROXY_PATH,
+  SANDBOX_RESOURCE_PATH_PREFIX,
+} from "./sandbox-proxy-template.ts";
+import { logger } from "./logger.ts";
+import type { McpServerManager, ServerConnection } from "./server-manager.ts";
+import type { McpExtensionState } from "./state.ts";
+import { SessionRecoveryAuthRequiredError, withSessionRecovery, type SessionRecoveryDeps } from "./session-recovery.ts";
+import { ensureToolCallApproved, isToolCallApprovalRequired } from "./tool-approval.ts";
+import { callToolViaTaskSession } from "./mcp-tasks.ts";
+import { extractUiToolVisibility, isUiToolCallableByApp, isUiToolVisibleToModel } from "./ui-tool-visibility.ts";
+import { resourceNameToToolName } from "./resource-tools.ts";
+import {
+  createUiModelContextUpdate,
   extractUiPromptText,
   getVisualizationStreamEnvelope,
+  isServerDisabled,
+  type McpConfig,
   type UiDisplayMode,
   type UiDisplayModeRequest,
   type UiDisplayModeResult,
@@ -25,14 +42,21 @@ import {
   type UiProxyRequestBody,
   type UiProxyResult,
   type UiResourceContent,
+  type UiServerHandle,
   type UiSessionMessages,
   type UiStreamSummary,
 } from "./types.ts";
+
+export type { UiServerHandle };
 
 const MAX_BODY_SIZE = 2 * 1024 * 1024;
 const ABANDONED_GRACE_MS = 60_000;
 const WATCHDOG_INTERVAL_MS = 5_000;
 const MAX_EVENT_LOG = 128;
+const MAX_CONTEXT_UPDATES = 20;
+const MOSHI_DISCOVERY_PORT_START = 8377;
+const MOSHI_DISCOVERY_PORT_END = 8396;
+let nextMoshiDiscoveryPort = MOSHI_DISCOVERY_PORT_START;
 
 export interface UiServerOptions {
   serverName: string;
@@ -40,6 +64,17 @@ export interface UiServerOptions {
   toolArgs: Record<string, unknown>;
   resource: UiResourceContent;
   manager: McpServerManager;
+  /**
+   * Live extension config, used to re-read the server definition when
+   * recovering a terminated Streamable HTTP session (see
+   * session-recovery.ts). Optional so existing embedders/tests that don't
+   * need session recovery aren't forced to supply it; without it, proxied
+   * tool calls run without recovery (unchanged pre-existing behavior).
+   */
+  config?: McpConfig;
+  /** Live state enables TUI approval prompts for iframe-originated tool calls. */
+  state?: McpExtensionState;
+  onNeedsAuth?: SessionRecoveryDeps["onNeedsAuth"];
   consentManager: ConsentManager;
   hostContext?: UiHostContext;
   initialResultPromise?: Promise<CallToolResult>;
@@ -50,25 +85,10 @@ export interface UiServerOptions {
   onComplete?: (reason: string) => void;
 }
 
-export interface UiServerHandle {
-  url: string;
-  port: number;
-  sessionToken: string;
-  serverName: string;
-  toolName: string;
-  close: (reason?: string) => void;
-  sendToolInput: (args: Record<string, unknown>) => void;
-  sendToolResult: (result: CallToolResult) => void;
-  sendResultPatch: (result: CallToolResult) => void;
-  sendToolCancelled: (reason: string) => void;
-  sendHostContext: (context: UiHostContext) => void;
-  /** Get accumulated messages from this session */
-  getSessionMessages: () => UiSessionMessages;
-  getStreamSummary: () => UiStreamSummary | undefined;
-}
-
 export async function startUiServer(options: UiServerOptions): Promise<UiServerHandle> {
   const sessionToken = options.sessionToken ?? randomUUID();
+  const sandboxResourcePath = `${SANDBOX_RESOURCE_PATH_PREFIX}${randomUUID()}`;
+  const resourceAllow = buildAllowAttribute(options.resource.meta.permissions);
   const log = logger.child({ 
     component: "UiServer",
     server: options.serverName,
@@ -85,13 +105,20 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
   let currentDisplayMode: UiDisplayMode = options.hostContext?.displayMode ?? "inline";
   let nextEventId = 1;
   const eventLog: Array<{ id: number; name: string; payload: unknown }> = [];
+  let latestCheckpointEventId: number | undefined;
   let streamSummary: UiStreamSummary | undefined;
+  let server: http.Server | null = null;
+  let sandboxProxyServer: http.Server | null = null;
+  let sandboxProxyUrl: string | null = null;
+  let closeTimer: NodeJS.Timeout | null = null;
+  let listenersClosed = false;
 
   // Track messages from UI for retrieval
   const sessionMessages: UiSessionMessages = {
     prompts: [],
     notifications: [],
     intents: [],
+    contexts: [],
   };
 
   const hostContext: UiHostContext = {
@@ -117,13 +144,51 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
     }
   }
 
+  const isAppOnlyTool = (toolName: string): boolean => {
+    const toolDefinition = options.manager.getConnection(options.serverName)?.tools?.find((tool) => tool.name === toolName);
+    if (!toolDefinition) return false;
+    const visibility = extractUiToolVisibility(toolDefinition._meta);
+    return isUiToolCallableByApp(visibility) && !isUiToolVisibleToModel(visibility);
+  };
+
+  const recordUiMessage = async (msgParams: UiMessageParams): Promise<void> => {
+    const promptText = extractUiPromptText(msgParams);
+
+    // Track messages by type (order: prompt → intent → notify)
+    // Must match the order in index.ts onMessage handler
+    if (promptText) {
+      sessionMessages.prompts.push(promptText);
+      log.debug("UI prompt received", { prompt: promptText.slice(0, 100) });
+    } else if (msgParams.type === "intent" || msgParams.intent) {
+      const intentName = msgParams.intent ?? "";
+      if (intentName) {
+        sessionMessages.intents.push({
+          intent: intentName,
+          ...(msgParams.params !== undefined ? { params: msgParams.params } : {}),
+        });
+        log.debug("UI intent received", { intent: intentName });
+      }
+    } else if (msgParams.type === "notify" || msgParams.message) {
+      const notifyText = msgParams.message ?? "";
+      if (notifyText) {
+        sessionMessages.notifications.push(notifyText);
+        log.debug("UI notification", { message: notifyText.slice(0, 100) });
+      }
+    }
+
+    await options.onMessage?.(msgParams);
+  };
+
   const touchHeartbeat = () => {
     lastHeartbeatAt = Date.now();
   };
 
-  const updateStreamSummary = (payload: unknown) => {
+  const updateStreamSummary = (eventId: number, payload: unknown) => {
     const envelope = getVisualizationStreamEnvelope((payload as { structuredContent?: unknown } | null)?.structuredContent);
     if (!envelope) return;
+    if (envelope.frameType === "checkpoint" || envelope.frameType === "final") {
+      latestCheckpointEventId = eventId;
+    }
     if (!streamSummary) {
       streamSummary = {
         streamId: envelope.streamId,
@@ -137,7 +202,8 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
       streamSummary.phases.push(envelope.phase);
     }
     streamSummary.finalStatus = envelope.status;
-    streamSummary.lastMessage = envelope.message;
+    if (envelope.message !== undefined) streamSummary.lastMessage = envelope.message;
+    else delete streamSummary.lastMessage;
   };
 
   const serializeEvent = (eventId: number, name: string, payload: unknown): string => {
@@ -145,14 +211,9 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
   };
 
   const getLatestCheckpointIndex = () => {
-    for (let index = eventLog.length - 1; index >= 0; index -= 1) {
-      const entry = eventLog[index];
-      const envelope = getVisualizationStreamEnvelope((entry.payload as { structuredContent?: unknown } | null)?.structuredContent);
-      if (envelope?.frameType === "checkpoint" || envelope?.frameType === "final") {
-        return index;
-      }
-    }
-    return -1;
+    const firstEventId = eventLog[0]?.id;
+    if (latestCheckpointEventId === undefined || firstEventId === undefined || latestCheckpointEventId < firstEventId) return -1;
+    return latestCheckpointEventId - firstEventId;
   };
 
   const pruneEventLog = () => {
@@ -172,7 +233,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
     if (completed) return;
     const eventId = nextEventId++;
     eventLog.push({ id: eventId, name, payload });
-    updateStreamSummary(payload);
+    updateStreamSummary(eventId, payload);
     pruneEventLog();
     const chunk = serializeEvent(eventId, name, payload);
     for (const client of sseClients) {
@@ -218,6 +279,32 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
     watchdog = null;
   };
 
+  const closeListeners = () => {
+    if (listenersClosed) return;
+    listenersClosed = true;
+    stopWatchdog();
+    if (closeTimer) {
+      clearTimeout(closeTimer);
+      closeTimer = null;
+    }
+    try {
+      server?.close();
+    } catch {}
+    try {
+      sandboxProxyServer?.close();
+    } catch {}
+    closeSse();
+  };
+
+  const scheduleListenerClose = () => {
+    if (closeTimer || listenersClosed) return;
+    closeTimer = setTimeout(() => {
+      closeTimer = null;
+      closeListeners();
+    }, 20);
+    closeTimer.unref();
+  };
+
   const markCompleted = (reason: string) => {
     if (completed) return;
     log.debug("Session completed", { reason });
@@ -225,16 +312,44 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
     completed = true;
     stopWatchdog();
     options.onComplete?.(reason);
+    scheduleListenerClose();
   };
 
-  const server = http.createServer(async (req, res) => {
+  const hostServer = http.createServer(async (req, res) => {
     try {
       const method = req.method || "GET";
-      const url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
+      const hostHeader = req.headers.host;
+      if (!hostHeader) {
+        sendText(res, 400, "Missing host");
+        return;
+      }
+      const url = new URL(req.url || "/", `http://${hostHeader}`);
+      if (!isAllowedHost(url.hostname)) {
+        sendText(res, 403, "Invalid host");
+        return;
+      }
+
+      if (method === "HEAD" && url.pathname === "/") {
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end();
+        return;
+      }
 
       if (method === "GET" && url.pathname === "/") {
+        if (!url.searchParams.has("session")) {
+          res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+          res.end(
+            "<!doctype html><html><head><meta charset=\"utf-8\"><title>MCP UI</title></head>" +
+              "<body><p>Open the authenticated MCP UI URL shown by Pi.</p></body></html>",
+          );
+          return;
+        }
         if (!validateTokenQuery(url, sessionToken, res)) return;
         touchHeartbeat();
+        if (!sandboxProxyUrl) {
+          sendText(res, 503, "Sandbox proxy is not ready");
+          return;
+        }
 
         const html = buildHostHtmlTemplate({
           sessionToken,
@@ -242,10 +357,11 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
           toolName: options.toolName,
           toolArgs: options.toolArgs,
           resource: options.resource,
-          allowAttribute: buildAllowAttribute(options.resource.meta.permissions),
+          allowAttribute: resourceAllow,
           requireToolConsent: options.consentManager.requiresPrompt(options.serverName),
           cacheToolConsent: options.consentManager.shouldCacheConsent(),
           hostContext,
+          sandboxProxyUrl,
         });
 
         res.writeHead(200, {
@@ -278,21 +394,6 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
       if (method === "GET" && url.pathname === "/health") {
         if (!validateTokenQuery(url, sessionToken, res)) return;
         sendJson(res, 200, { ok: true, result: { healthy: true } });
-        return;
-      }
-
-      if (method === "GET" && url.pathname === "/ui-app") {
-        if (!validateTokenQuery(url, sessionToken, res)) return;
-        touchHeartbeat();
-        // Serve the MCP app's UI HTML directly (avoids blob URL security issues)
-        // Apply CSP meta tag if specified in resource metadata
-        const cspContent = buildCspMetaContent(options.resource.meta.csp);
-        const appHtml = applyCspMeta(options.resource.html, cspContent);
-        res.writeHead(200, {
-          "Content-Type": "text/html; charset=utf-8",
-          "Cache-Control": "no-store",
-        });
-        res.end(appHtml);
         return;
       }
 
@@ -336,17 +437,124 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
           sendJson(res, 503, { ok: false, error: `Server "${options.serverName}" is not connected` });
           return;
         }
+        if (isServerDisabled(options.config?.mcpServers[options.serverName]) || isServerDisabled(connection.definition)) {
+          sendJson(res, 503, { ok: false, error: `Server "${options.serverName}" is disabled` });
+          return;
+        }
+
+        const toolDefinitions = Array.isArray(connection.tools) ? connection.tools : [];
+        const toolDefinition = toolDefinitions.find((tool) => tool.name === callParams.name);
+        if (!toolDefinition) {
+          sendJson(res, 403, { ok: false, error: `MCP tool "${callParams.name}" is not callable by apps` });
+          return;
+        }
+        const uiVisibility = extractUiToolVisibility(toolDefinition._meta);
+        if (!isUiToolCallableByApp(uiVisibility)) {
+          sendJson(res, 403, { ok: false, error: `MCP tool "${callParams.name}" is not callable by apps` });
+          return;
+        }
+
+        let normalizedArguments: Record<string, unknown>;
+        try {
+          normalizedArguments = normalizeToolArguments(callParams.arguments, `tool "${callParams.name}" arguments`);
+        } catch (error) {
+          sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+          return;
+        }
+        const callArgs = {
+          name: callParams.name,
+          arguments: normalizedArguments,
+        };
+        let uiResourceUri: string | undefined;
+        try {
+          uiResourceUri = getToolUiResourceUri({ _meta: toolDefinition._meta });
+        } catch {
+          // Preserve the endpoint's existing behavior for malformed declarations.
+        }
+        const toolMeta = {
+          name: callParams.name,
+          originalName: callParams.name,
+          description: toolDefinition?.description ?? "",
+          ...(toolDefinition?.inputSchema !== undefined ? { inputSchema: toolDefinition.inputSchema } : {}),
+          ...(uiResourceUri !== undefined ? { uiResourceUri } : {}),
+          ...(uiVisibility !== undefined ? { uiVisibility } : {}),
+        };
+        const approvalMetadata = new Map(options.state?.toolMetadata);
+        const definition = options.config?.mcpServers[options.serverName] ?? options.state?.config.mcpServers[options.serverName];
+        approvalMetadata.set(options.serverName, [
+          ...connection.tools.map(tool => ({
+            name: tool.name,
+            originalName: tool.name,
+            description: tool.description ?? "",
+          })),
+          ...(definition?.exposeResources !== false ? (connection.resources ?? []).map(resource => {
+            const originalName = `read_${resourceNameToToolName(resource.name)}`;
+            return {
+              name: originalName,
+              originalName,
+              description: resource.description ?? `Read resource: ${resource.uri}`,
+            };
+          }) : []),
+        ]);
+        const approval = options.state
+          ? await ensureToolCallApproved(
+              options.state,
+              options.serverName,
+              toolMeta,
+              callArgs.arguments,
+              options.state.owner?.signal,
+              "iframe",
+              approvalMetadata,
+            )
+          : options.config && isToolCallApprovalRequired(options.config, options.serverName, toolMeta, approvalMetadata)
+            ? { ok: false as const, reason: "approval_required_headless" as const }
+            : { ok: true as const };
+        if (approval.ok === false) {
+          const denied = approval.reason === "denied";
+          const message = denied
+            ? `The user declined approval to run MCP tool "${callParams.name}" on server "${options.serverName}".`
+            : `MCP tool "${callParams.name}" on server "${options.serverName}" is approval-gated and requires an interactive session.`;
+          sendJson(res, 200, {
+            ok: true,
+            result: {
+              content: [{ type: "text" as const, text: message }],
+              details: {
+                error: denied ? "approval_denied" : "approval_required",
+                server: options.serverName,
+                tool: callParams.name,
+              },
+            },
+          });
+          return;
+        }
 
         try {
           options.manager.touch(options.serverName);
           options.manager.incrementInFlight(options.serverName);
-          const result = await connection.client.callTool({
-            name: callParams.name,
-            arguments:
-              callParams.arguments && typeof callParams.arguments === "object" && !Array.isArray(callParams.arguments)
-                ? callParams.arguments
-                : {},
-          }, undefined, options.manager.getRequestOptions?.(options.serverName));
+          const callTool = async (conn: ServerConnection) => {
+            await options.manager.ensureListen?.(options.serverName, conn);
+            const requestOptions = options.manager.getRequestOptions?.(options.serverName);
+            if (conn.taskSession) {
+              return callToolViaTaskSession(conn.taskSession, {
+                name: callArgs.name,
+                args: callArgs.arguments,
+                requestTimeoutMs: requestOptions?.timeout,
+                signal: requestOptions?.signal,
+              });
+            }
+            return conn.client.callTool(callArgs, requestOptions);
+          };
+          const result = options.config
+            ? await withSessionRecovery(
+                {
+                  manager: options.manager,
+                  config: options.config,
+                  ...(options.onNeedsAuth ? { onNeedsAuth: options.onNeedsAuth } : {}),
+                },
+                options.serverName,
+                callTool,
+              )
+            : await callTool(connection);
           sendJson(res, 200, { ok: true, result });
         } finally {
           options.manager.decrementInFlight(options.serverName);
@@ -362,40 +570,53 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
         return;
       }
 
-      if (url.pathname === "/proxy/ui/message") {
-        const msgParams = params as UiMessageParams;
-        const promptText = extractUiPromptText(msgParams);
-        
-        // Track messages by type (order: prompt → intent → notify)
-        // Must match the order in index.ts onMessage handler
-        if (promptText) {
-          sessionMessages.prompts.push(promptText);
-          log.debug("UI prompt received", { prompt: promptText.slice(0, 100) });
-        } else if (msgParams.type === "intent" || msgParams.intent) {
-          const intentName = msgParams.intent ?? "";
-          if (intentName) {
-            sessionMessages.intents.push({ 
-              intent: intentName, 
-              params: msgParams.params 
-            });
-            log.debug("UI intent received", { intent: intentName });
-          }
-        } else if (msgParams.type === "notify" || msgParams.message) {
-          const notifyText = msgParams.message ?? "";
-          if (notifyText) {
-            sessionMessages.notifications.push(notifyText);
-            log.debug("UI notification", { message: notifyText.slice(0, 100) });
-          }
+      if (url.pathname === "/proxy/ui/generated-tool-call-intent") {
+        const tool = typeof params.tool === "string" ? params.tool : undefined;
+        if (tool && isAppOnlyTool(tool)) {
+          log.debug("Ignored generated app-only tool call intent", { tool });
+        } else {
+          await recordUiMessage({
+            type: "intent",
+            intent: "call_tool",
+            params: {
+              ...(tool !== undefined ? { tool } : {}),
+              ...(params.arguments !== undefined ? { arguments: params.arguments } : {}),
+              ...(params.isError !== undefined ? { isError: params.isError } : {}),
+            },
+          });
         }
-        
-        await options.onMessage?.(msgParams);
+        sendJson(res, 200, { ok: true, result: {} });
+        return;
+      }
+
+      if (url.pathname === "/proxy/ui/message") {
+        await recordUiMessage(params as UiMessageParams);
         sendJson(res, 200, { ok: true, result: {} });
         return;
       }
 
       if (url.pathname === "/proxy/ui/context") {
-        const ctxParams = params as UiModelContextParams;
-        log.debug("UI context update", { hasContent: !!ctxParams.content });
+        const content = params.content;
+        const structuredContent = params.structuredContent;
+        if (
+          (content !== undefined && (!Array.isArray(content) || content.some((block) => !ContentBlockSchema.safeParse(block).success))) ||
+          (structuredContent !== undefined && (!structuredContent || typeof structuredContent !== "object" || Array.isArray(structuredContent)))
+        ) {
+          sendJson(res, 400, { ok: false, error: "Invalid update-model-context params" });
+          return;
+        }
+        const ctxParams: UiModelContextParams = {
+          ...(content !== undefined ? { content: content as NonNullable<UiModelContextParams["content"]> } : {}),
+          ...(structuredContent !== undefined ? { structuredContent: structuredContent as Record<string, unknown> } : {}),
+        };
+        const update = createUiModelContextUpdate(ctxParams);
+        if (update) {
+          sessionMessages.contexts.push(update);
+          while (sessionMessages.contexts.length > MAX_CONTEXT_UPDATES) {
+            sessionMessages.contexts.shift();
+          }
+        }
+        log.debug("UI context update", { hasContent: !!ctxParams.content, hasUpdate: !!update });
         await options.onContextUpdate?.(ctxParams);
         sendJson(res, 200, { ok: true, result: {} });
         return;
@@ -447,17 +668,19 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
           : "done";
         markCompleted(reason);
         sendJson(res, 200, { ok: true, result: {} });
-        setTimeout(() => {
-          try {
-            server.close();
-          } catch {}
-          closeSse();
-        }, 20).unref();
         return;
       }
 
       sendJson(res, 404, { ok: false, error: "Not found" });
     } catch (error) {
+      if (error instanceof SessionRecoveryAuthRequiredError) {
+        const fallback = `Server "${options.serverName}" requires OAuth authentication. Run mcp({ action: "auth-start", server: "${options.serverName}" }) to get a browser URL, or /mcp-auth ${options.serverName} in an interactive local session.`;
+        const message = error.authMessage ?? (options.config
+          ? formatAuthRequiredMessage(options.config, options.serverName, fallback)
+          : fallback);
+        sendJson(res, 401, { ok: false, error: message });
+        return;
+      }
       const wrapped = wrapError(error, { server: options.serverName, tool: options.toolName });
       const status = /approval required|denied/i.test(wrapped.message) ? 403 : 500;
       if (status === 500) {
@@ -466,6 +689,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
       sendJson(res, status, { ok: false, error: wrapped.message });
     }
   });
+  server = hostServer;
 
   if (options.initialResultPromise) {
     options.initialResultPromise.then(
@@ -481,67 +705,179 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
     if (completed) return;
     if (Date.now() - lastHeartbeatAt <= ABANDONED_GRACE_MS) return;
     markCompleted("stale");
-    try {
-      server.close();
-    } catch {}
-    closeSse();
   }, WATCHDOG_INTERVAL_MS);
   watchdog.unref();
 
   return new Promise((resolve, reject) => {
-    const onError = (error: Error) => {
-      log.error("Failed to start server", error);
-      reject(new ServerError(error.message, { port: options.port, cause: error }));
+    const candidates = resolvePortCandidates(options.port);
+    let candidateIndex = 0;
+
+    const startSandboxProxy = (parentOrigin: string): Promise<number> => {
+      const proxy = http.createServer((req, res) => {
+        try {
+          const method = req.method || "GET";
+          const hostHeader = req.headers.host;
+          if (!hostHeader) {
+            sendText(res, 400, "Missing host");
+            return;
+          }
+          const url = new URL(req.url || "/", `http://${hostHeader}`);
+          if (!isAllowedHost(url.hostname)) {
+            sendText(res, 403, "Invalid host");
+            return;
+          }
+
+          if ((method === "GET" || method === "HEAD") && url.pathname === SANDBOX_PROXY_PATH) {
+            res.writeHead(200, {
+              "Content-Type": "text/html; charset=utf-8",
+              "Cache-Control": "no-store",
+              "Content-Security-Policy": buildSandboxProxyCsp(),
+              "Referrer-Policy": "no-referrer",
+              "X-Content-Type-Options": "nosniff",
+            });
+            res.end(method === "HEAD" ? undefined : buildSandboxProxyHtml({
+              parentOrigin,
+              resourcePath: sandboxResourcePath,
+              allowAttribute: resourceAllow,
+            }));
+            return;
+          }
+
+          if ((method === "GET" || method === "HEAD") && url.pathname === sandboxResourcePath) {
+            res.writeHead(200, {
+              "Content-Type": "text/html; charset=utf-8",
+              "Cache-Control": "no-store",
+              "Content-Security-Policy": buildSandboxResourceCsp(options.resource.meta.csp),
+              "Referrer-Policy": "no-referrer",
+              "X-Content-Type-Options": "nosniff",
+            });
+            res.end(method === "HEAD" ? undefined : options.resource.html);
+            return;
+          }
+
+          sendJson(res, 404, { ok: false, error: "Not found" });
+        } catch (error) {
+          sendJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
+        }
+      });
+      sandboxProxyServer = proxy;
+
+      return new Promise((resolveProxy, rejectProxy) => {
+        const onError = (error: NodeJS.ErrnoException) => {
+          proxy.off("listening", onListening);
+          rejectProxy(error);
+        };
+        const onListening = () => {
+          proxy.off("error", onError);
+          const address = proxy.address();
+          if (!address || typeof address === "string") {
+            rejectProxy(new ServerError("invalid sandbox proxy address"));
+            return;
+          }
+          resolveProxy(address.port);
+        };
+        proxy.once("error", onError);
+        proxy.listen(0, "127.0.0.1", onListening);
+      });
     };
 
-    server.once("error", onError);
-    server.listen(options.port ?? 0, "127.0.0.1", () => {
-      server.off("error", onError);
-      const address = server.address();
+    const listen = () => {
+      const candidate = candidates[candidateIndex];
+      if (candidate === undefined) {
+        const error = new ServerError("no UI server port candidates available");
+        closeListeners();
+        reject(error);
+        return;
+      }
+      hostServer.once("error", onError);
+      hostServer.listen(candidate, "127.0.0.1", onListening);
+    };
+
+    const onError = (error: NodeJS.ErrnoException) => {
+      hostServer.off("listening", onListening);
+      if (error.code === "EADDRINUSE" && candidateIndex < candidates.length - 1) {
+        candidateIndex += 1;
+        listen();
+        return;
+      }
+      log.error("Failed to start server", error);
+      const port = candidates[candidateIndex];
+      closeListeners();
+      reject(new ServerError(error.message, {
+        ...(port !== undefined ? { port } : {}),
+        cause: error,
+      }));
+    };
+
+    const onListening = () => {
+      hostServer.off("error", onError);
+      const address = hostServer.address();
       if (!address || typeof address === "string") {
         const err = new ServerError("invalid address");
         log.error("Invalid server address", err);
+        closeListeners();
         reject(err);
         return;
       }
 
-      log.debug("Server started", { port: address.port });
+      const parentOrigin = `http://localhost:${address.port}`;
+      void startSandboxProxy(parentOrigin).then((proxyPort) => {
+        if (completed || listenersClosed) {
+          closeListeners();
+          reject(new ServerError("UI session completed before sandbox proxy was ready"));
+          return;
+        }
+        sandboxProxyUrl = `http://localhost:${proxyPort}${SANDBOX_PROXY_PATH}`;
+        log.debug("Servers started", { port: address.port, proxyPort });
+        rememberMoshiDiscoveryPort(address.port);
 
-      const handle: UiServerHandle = {
-        url: `http://localhost:${address.port}/?session=${sessionToken}`,
-        port: address.port,
-        sessionToken,
-        serverName: options.serverName,
-        toolName: options.toolName,
-        close: (reason?: string) => {
-          markCompleted(reason ?? "closed");
-          try {
-            server.close();
-          } catch {}
-          closeSse();
-        },
-        sendToolInput: (args: Record<string, unknown>) => {
-          pushEvent("tool-input", { arguments: args });
-        },
-        sendToolResult: (result: CallToolResult) => {
-          pushEvent("tool-result", result);
-        },
-        sendResultPatch: (result: CallToolResult) => {
-          pushEvent("result-patch", result);
-        },
-        sendToolCancelled: (reason: string) => {
-          pushEvent("tool-cancelled", { reason });
-        },
-        sendHostContext: (context: UiHostContext) => {
-          Object.assign(hostContext, context);
-          pushEvent("host-context", context);
-        },
-        getSessionMessages: () => ({ ...sessionMessages }),
-        getStreamSummary: () => streamSummary ? { ...streamSummary, phases: [...streamSummary.phases] } : undefined,
-      };
+        const handle: UiServerHandle = {
+          url: `http://localhost:${address.port}/?session=${sessionToken}`,
+          port: address.port,
+          proxyUrl: sandboxProxyUrl,
+          proxyPort,
+          sessionToken,
+          serverName: options.serverName,
+          toolName: options.toolName,
+          close: (reason?: string) => {
+            markCompleted(reason ?? "closed");
+            closeListeners();
+          },
+          sendToolInput: (args: Record<string, unknown>) => {
+            pushEvent("tool-input", { arguments: args });
+          },
+          sendToolResult: (result: CallToolResult) => {
+            pushEvent("tool-result", result);
+          },
+          sendResultPatch: (result: CallToolResult) => {
+            pushEvent("result-patch", result);
+          },
+          sendToolCancelled: (reason: string) => {
+            pushEvent("tool-cancelled", { reason });
+          },
+          sendResourceUpdated: (uri: string) => {
+            pushEvent("resource-updated", { uri });
+          },
+          sendHostContext: (context: UiHostContext) => {
+            Object.assign(hostContext, context);
+            pushEvent("host-context", context);
+          },
+          getSessionMessages: () => ({ ...sessionMessages }),
+          getStreamSummary: () => streamSummary ? { ...streamSummary, phases: [...streamSummary.phases] } : undefined,
+        };
 
-      resolve(handle);
-    });
+        resolve(handle);
+      }).catch((error) => {
+        log.error("Failed to start sandbox proxy", error instanceof Error ? error : undefined);
+        closeListeners();
+        const wrapped = error instanceof ServerError
+          ? error
+          : new ServerError(error instanceof Error ? error.message : String(error), { cause: error });
+        reject(wrapped);
+      });
+    };
+
+    listen();
   });
 }
 
@@ -589,8 +925,34 @@ function readBody(req: IncomingMessage): Promise<unknown> {
   });
 }
 
-function validateTokenQuery(url: URL, expected: string, res: ServerResponse): boolean {
-  const token = url.searchParams.get("session");
+function resolvePortCandidates(port: number | undefined): number[] {
+  if (port !== undefined) return [port];
+  const candidates: number[] = [];
+  const count = MOSHI_DISCOVERY_PORT_END - MOSHI_DISCOVERY_PORT_START + 1;
+  for (let offset = 0; offset < count; offset += 1) {
+    const candidate = MOSHI_DISCOVERY_PORT_START + ((nextMoshiDiscoveryPort - MOSHI_DISCOVERY_PORT_START + offset) % count);
+    candidates.push(candidate);
+  }
+  candidates.push(0);
+  return candidates;
+}
+
+function rememberMoshiDiscoveryPort(port: number): void {
+  if (port < MOSHI_DISCOVERY_PORT_START || port > MOSHI_DISCOVERY_PORT_END) return;
+  nextMoshiDiscoveryPort = port >= MOSHI_DISCOVERY_PORT_END ? MOSHI_DISCOVERY_PORT_START : port + 1;
+}
+
+function isAllowedHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+}
+
+function validateTokenQuery(
+  url: URL,
+  expected: string,
+  res: ServerResponse,
+  parameter = "session",
+): boolean {
+  const token = url.searchParams.get(parameter);
   if (token !== expected) {
     sendJson(res, 403, { ok: false, error: "Invalid session" });
     return false;
@@ -620,4 +982,12 @@ function sendJson<T>(
     "Cache-Control": "no-store",
   });
   res.end(JSON.stringify(payload));
+}
+
+function sendText(res: ServerResponse, status: number, text: string): void {
+  res.writeHead(status, {
+    "Content-Type": "text/plain; charset=utf-8",
+    "Cache-Control": "no-store",
+  });
+  res.end(text);
 }

@@ -1,206 +1,246 @@
+import { Check, Errors } from "typebox/value";
 import { Type } from "typebox";
-import type { DirectToolSpec, McpConfig } from "./types.ts";
+import type { DirectToolSpec, McpConfig, ToolPrefix } from "./types.ts";
 import type { MetadataCache } from "./metadata-cache.ts";
-import { isServerCacheValid } from "./metadata-cache.ts";
+import {
+  createCachedToolSelectorCandidateIndex,
+  getMissingConfiguredDirectToolServers,
+  isServerCacheValid,
+  parseDirectToolSelectors,
+} from "./metadata-cache.ts";
 import { resourceNameToToolName } from "./resource-tools.ts";
 import {
   createMcpDirectToolCallRenderer,
   renderMcpProxyToolCall,
   renderMcpToolResult,
 } from "./tool-result-renderer.ts";
-import { formatToolName, isToolExcluded } from "./types.ts";
+import {
+  formatToolName,
+  isServerDisabled,
+  isToolAllowed,
+  isToolExcluded,
+  isToolIncluded,
+  resolveToolPrefix,
+  resolveUniqueNameOwnership,
+  type ToolSelectorCandidateIndex,
+} from "./types.ts";
+import { isUiToolVisibleToModel } from "./ui-tool-visibility.ts";
 import { normalizeDirectToolInputSchema } from "./utils.ts";
 
 const BUILTIN_NAMES = new Set(["read", "bash", "edit", "write", "grep", "find", "ls", "mcp"]);
 
+/**
+ * Resolve the model-facing direct-tool surface from cached metadata.
+ *
+ * This is deliberately kept in the startup facade: it must be safe to use
+ * before the runtime graph is loaded, while still applying the same visibility,
+ * filtering, naming, and cache-identity rules as live metadata consumers.
+ */
 export function resolveDirectTools(
   config: McpConfig,
   cache: MetadataCache | null,
-  prefix: "server" | "none" | "short",
+  prefix: ToolPrefix,
   envOverride?: string[],
   defaultCwd?: string,
 ): DirectToolSpec[] {
+  if (!cache) return [];
+
   const specs: DirectToolSpec[] = [];
-  if (!cache) return specs;
-
-  const seenNames = new Set<string>();
-
-  const envServers = new Set<string>();
-  const envTools = new Map<string, Set<string>>();
-  if (envOverride) {
-    for (let item of envOverride) {
-      item = item.replace(/\/+$/, "");
-      if (item.includes("/")) {
-        const [server, tool] = item.split("/", 2);
-        if (server && tool) {
-          if (!envTools.has(server)) envTools.set(server, new Set());
-          envTools.get(server)!.add(tool);
-        } else if (server) {
-          envServers.add(server);
-        }
-      } else if (item) {
-        envServers.add(item);
-      }
-    }
-  }
-
+  const envSelection = envOverride ? parseDirectToolSelectors(envOverride) : null;
   const globalDirect = config.settings?.directTools;
+  const hasConfiguredToolFilters = Object.values(config.mcpServers).some((definition) => (
+    (Array.isArray(definition.includeTools) && definition.includeTools.length > 0)
+    || (Array.isArray(definition.excludeTools) && definition.excludeTools.length > 0)
+  ));
+  const selectorIndex: ToolSelectorCandidateIndex | undefined = hasConfiguredToolFilters
+    ? createCachedToolSelectorCandidateIndex(config.mcpServers, cache, prefix, defaultCwd)
+    : undefined;
 
   for (const [serverName, definition] of Object.entries(config.mcpServers)) {
+    if (isServerDisabled(definition)) continue;
+
     const serverCache = cache.servers[serverName];
     if (!serverCache || !isServerCacheValid(serverCache, definition, undefined, defaultCwd)) continue;
 
     let toolFilter: true | string[] | false = false;
-
-    if (envOverride) {
-      if (envServers.has(serverName)) {
+    let lazy = false;
+    if (envSelection) {
+      if (envSelection.servers.has(serverName)) {
         toolFilter = true;
-      } else if (envTools.has(serverName)) {
-        toolFilter = [...envTools.get(serverName)!];
+      } else if (envSelection.tools.has(serverName)) {
+        toolFilter = [...envSelection.tools.get(serverName)!];
       }
-    } else if (definition.directTools !== undefined) {
-      toolFilter = definition.directTools;
-    } else if (globalDirect) {
-      toolFilter = globalDirect;
+    } else {
+      const selected = definition.directTools !== undefined ? definition.directTools : globalDirect;
+      if (selected === "search") {
+        // Search-mode tools are registered with their real schemas but held
+        // out of the active tool set until lexical gateway search matches them.
+        toolFilter = true;
+        lazy = true;
+      } else if (selected !== undefined) {
+        toolFilter = selected;
+      }
     }
 
     if (!toolFilter) continue;
 
+    const effectivePrefix = resolveToolPrefix(definition, prefix);
+    const addSpec = (spec: DirectToolSpec): void => {
+      specs.push(spec);
+    };
+
     for (const tool of serverCache.tools ?? []) {
+      if (!isUiToolVisibleToModel(tool.uiVisibility)) continue;
       if (toolFilter !== true && !toolFilter.includes(tool.name)) continue;
-      if (isToolExcluded(tool.name, serverName, prefix, definition.excludeTools)) continue;
-      const prefixedName = formatToolName(tool.name, serverName, prefix);
+      if (!isToolAllowed(
+        tool.name,
+        serverName,
+        effectivePrefix,
+        definition.includeTools,
+        definition.excludeTools,
+        selectorIndex,
+      )) continue;
+
+      const prefixedName = formatToolName(tool.name, serverName, effectivePrefix);
       if (BUILTIN_NAMES.has(prefixedName)) {
         console.warn(`MCP: skipping direct tool "${prefixedName}" (collides with builtin)`);
         continue;
       }
-      if (seenNames.has(prefixedName)) {
-        console.warn(`MCP: skipping duplicate direct tool "${prefixedName}" from "${serverName}"`);
-        continue;
-      }
-      seenNames.add(prefixedName);
-      specs.push({
+      addSpec({
+        ...(lazy ? { lazy: true } : {}),
         serverName,
         originalName: tool.name,
         prefixedName,
         description: tool.description ?? "",
-        inputSchema: tool.inputSchema,
-        uiResourceUri: tool.uiResourceUri,
-        uiStreamMode: tool.uiStreamMode,
+        ...(tool.inputSchema !== undefined ? { inputSchema: tool.inputSchema } : {}),
+        ...(tool.uiResourceUri !== undefined ? { uiResourceUri: tool.uiResourceUri } : {}),
+        ...(tool.uiStreamMode !== undefined ? { uiStreamMode: tool.uiStreamMode } : {}),
       });
     }
 
-    if (definition.exposeResources !== false) {
-      for (const resource of serverCache.resources ?? []) {
-        const baseName = `get_${resourceNameToToolName(resource.name)}`;
-        if (toolFilter !== true && !toolFilter.includes(baseName)) continue;
-        if (isToolExcluded(baseName, serverName, prefix, definition.excludeTools)) continue;
-        const prefixedName = formatToolName(baseName, serverName, prefix);
-        if (BUILTIN_NAMES.has(prefixedName)) {
-          console.warn(`MCP: skipping direct resource tool "${prefixedName}" (collides with builtin)`);
-          continue;
+    if (definition.exposeResources === false) continue;
+    for (const resource of serverCache.resources ?? []) {
+      const originalName = `read_${resourceNameToToolName(resource.name)}`;
+      if (toolFilter !== true && !toolFilter.includes(originalName)) continue;
+      const legacyResourceName = `get_${resourceNameToToolName(resource.name)}`;
+      const included = isToolIncluded(originalName, serverName, effectivePrefix, definition.includeTools, selectorIndex)
+        || isToolIncluded(legacyResourceName, serverName, effectivePrefix, definition.includeTools, selectorIndex);
+      const excluded = isToolExcluded(originalName, serverName, effectivePrefix, definition.excludeTools, selectorIndex)
+        || isToolExcluded(legacyResourceName, serverName, effectivePrefix, definition.excludeTools, selectorIndex);
+      if (!included || excluded) continue;
+
+      const prefixedName = formatToolName(originalName, serverName, effectivePrefix);
+      if (BUILTIN_NAMES.has(prefixedName)) {
+        console.warn(`MCP: skipping direct resource tool "${prefixedName}" (collides with builtin)`);
+        continue;
+      }
+      addSpec({
+        ...(lazy ? { lazy: true } : {}),
+        serverName,
+        originalName,
+        prefixedName,
+        description: resource.description ?? `Read resource: ${resource.uri}`,
+        resourceUri: resource.uri,
+      });
+    }
+  }
+
+  const ownership = resolveUniqueNameOwnership(specs, spec => spec.prefixedName);
+  for (const [name, colliding] of ownership.collisions) {
+    console.warn(`MCP: skipping colliding direct name "${name}" from ${colliding.map(spec => `"${spec.serverName}"`).join(", ")}`);
+  }
+  return ownership.unique;
+}
+
+// Keep the legacy startup helper while accepting the unified selector-aware
+// signature. The three-argument form remains cwd-first for older extensions.
+export function getMissingStartupDirectToolServers(
+  config: McpConfig,
+  cache: MetadataCache | null,
+  envOverrideOrCwd?: string[] | string,
+  defaultCwd?: string,
+): string[] {
+  if (typeof envOverrideOrCwd === "string") {
+    return getMissingConfiguredDirectToolServers(config, cache, undefined, envOverrideOrCwd);
+  }
+  return getMissingConfiguredDirectToolServers(config, cache, envOverrideOrCwd, defaultCwd);
+}
+export { getMissingConfiguredDirectToolServers };
+
+export const DIRECT_TOOLS_ADVISORY_THRESHOLD = 75;
+
+export function getLargeDirectToolsAdvisory(
+  config: McpConfig,
+  specs: readonly DirectToolSpec[],
+): string | undefined {
+  if (config.settings?.warnOnLargeDirectTools === false) return undefined;
+  const eagerCount = specs.filter((spec) => !spec.lazy).length;
+  if (eagerCount < DIRECT_TOOLS_ADVISORY_THRESHOLD) return undefined;
+  return `MCP: ${eagerCount} direct tools resolved. Each direct tool adds prompt context; README guidance recommends targeted sets of 5-20 tools and using the proxy or an explicit string[] when 75+ direct tools would be registered. Set settings.warnOnLargeDirectTools to false to hide this advisory.`;
+}
+
+/**
+ * Recover one model-emitted JSON layer for schema-declared object and array
+ * properties, then validate the complete input against the same schema.
+ */
+export function prepareDirectToolArguments(inputSchema: unknown, args: unknown): unknown {
+  if (!inputSchema || typeof inputSchema !== "object" || Array.isArray(inputSchema)) return args;
+  const schema = inputSchema as Record<string, unknown>;
+  if (schema.type !== "object") return args;
+  const input = args && typeof args === "object" && !Array.isArray(args)
+    ? args as Record<string, unknown>
+    : null;
+  const properties = schema.properties;
+  let prepared: Record<string, unknown> | undefined;
+
+  if (input && properties && typeof properties === "object" && !Array.isArray(properties)) {
+    for (const [name, propertySchema] of Object.entries(properties)) {
+      if (!Object.hasOwn(input, name) || typeof input[name] !== "string"
+        || !propertySchema || typeof propertySchema !== "object" || Array.isArray(propertySchema)) continue;
+      if (Check(propertySchema as never, input[name])) continue;
+      try {
+        const parsed: unknown = JSON.parse(input[name] as string);
+        const isContainer = Array.isArray(parsed)
+          || (parsed !== null && typeof parsed === "object");
+        if (isContainer && Check(propertySchema as never, parsed)) {
+          prepared ??= { ...input };
+          prepared[name] = parsed;
         }
-        if (seenNames.has(prefixedName)) {
-          console.warn(`MCP: skipping duplicate direct resource tool "${prefixedName}" from "${serverName}"`);
-          continue;
-        }
-        seenNames.add(prefixedName);
-        specs.push({
-          serverName,
-          originalName: baseName,
-          prefixedName,
-          description: resource.description ?? `Read resource: ${resource.uri}`,
-          resourceUri: resource.uri,
-        });
+      } catch {
+        // Validation below reports malformed or shape-incompatible values.
       }
     }
   }
 
-  return specs;
-}
-
-export function getMissingConfiguredDirectToolServers(
-  config: McpConfig,
-  cache: MetadataCache | null,
-  defaultCwd?: string,
-): string[] {
-  const missing: string[] = [];
-  const globalDirect = config.settings?.directTools;
-
-  for (const [serverName, definition] of Object.entries(config.mcpServers)) {
-    const hasDirectTools = definition.directTools !== undefined
-      ? !!definition.directTools
-      : !!globalDirect;
-
-    if (!hasDirectTools) continue;
-
-    const serverCache = cache?.servers?.[serverName];
-    if (!serverCache || !isServerCacheValid(serverCache, definition, undefined, defaultCwd)) {
-      missing.push(serverName);
-    }
+  const candidate = prepared ?? args;
+  if (!Check(inputSchema as never, candidate)) {
+    const errors = Errors(inputSchema as never, candidate);
+    const issues = errors.slice(0, 8).map((error) => ({
+      instancePath: error.instancePath || "/",
+      keyword: error.keyword,
+      message: error.message,
+    }));
+    throw new TypeError(`MCP direct tool arguments do not match the advertised input schema: ${JSON.stringify({
+      issues,
+      total: errors.length,
+      truncated: errors.length > issues.length,
+    })}`);
   }
-
-  return missing;
+  return candidate;
 }
 
+/**
+ * Pure function of config: the description must stay byte-stable across
+ * runtime metadata changes (tool counts, connection state, and instructions).
+ * Live counts belong to `mcp({})` and full server instructions are not a
+ * gateway action in this bounded surface.
+ */
 export function buildProxyDescription(
-  config: McpConfig,
-  cache: MetadataCache | null,
-  directSpecs: DirectToolSpec[],
+  _config: McpConfig,
+  _cache?: MetadataCache | null,
+  _directSpecs?: DirectToolSpec[],
 ): string {
-  const prefix = config.settings?.toolPrefix ?? "server";
-  let desc = `MCP gateway - connect to MCP servers and call their tools. Non-MCP Pi tools should be called directly, not through mcp.\n`;
-
-  const directByServer = new Map<string, number>();
-  for (const spec of directSpecs) {
-    directByServer.set(spec.serverName, (directByServer.get(spec.serverName) ?? 0) + 1);
-  }
-  if (directByServer.size > 0) {
-    const parts = [...directByServer.entries()].map(
-      ([server, count]) => `${server} (${count})`,
-    );
-    desc += `\nDirect tools available (call as normal tools): ${parts.join(", ")}\n`;
-  }
-
-  const serverSummaries: string[] = [];
-  for (const serverName of Object.keys(config.mcpServers)) {
-    const entry = cache?.servers?.[serverName];
-    const definition = config.mcpServers[serverName];
-    const toolCount = (entry?.tools ?? []).filter(
-      (tool) => !isToolExcluded(tool.name, serverName, prefix, definition.excludeTools),
-    ).length;
-    const resourceCount = definition?.exposeResources !== false
-      ? (entry?.resources ?? []).filter((resource) => {
-          const baseName = `get_${resourceNameToToolName(resource.name)}`;
-          return !isToolExcluded(baseName, serverName, prefix, definition.excludeTools);
-        }).length
-      : 0;
-    const totalItems = toolCount + resourceCount;
-    if (totalItems === 0) continue;
-    const directCount = directByServer.get(serverName) ?? 0;
-    const proxyCount = totalItems - directCount;
-    if (proxyCount > 0) {
-      serverSummaries.push(`${serverName} (${proxyCount} tools)`);
-    }
-  }
-
-  if (serverSummaries.length > 0) {
-    desc += `\nServers: ${serverSummaries.join(", ")}\n`;
-  }
-
-  desc += `\nUsage:\n`;
-  desc += `  mcp({ })                              → Show server status\n`;
-  desc += `  mcp({ server: "name" })               → List tools from server\n`;
-  desc += `  mcp({ search: "query" })              → Search MCP tools by name/description\n`;
-  desc += `  mcp({ describe: "tool_name" })        → Show tool details and parameters\n`;
-  desc += `  mcp({ connect: "server-name" })       → Connect to a server and refresh metadata\n`;
-  desc += `  mcp({ tool: "name", args: '{"key": "value"}' })    → Call a tool (args is JSON string)\n`;
-  desc += `  mcp({ action: "ui-messages" })        → Retrieve accumulated messages from completed UI sessions\n`;
-  desc += `  mcp({ action: "auth-start", server: "name" })      → Start manual OAuth and get a browser URL\n`;
-  desc += `  mcp({ action: "auth-complete", server: "name", args: '{"redirectUrl":"..."}' }) → Complete manual OAuth\n`;
-  desc += `\nMode: action > tool (call) > connect > describe > search > server (list) > nothing (status)`;
-
-  return desc;
+  return "MCP gateway for server status, tool search, tool description, connection, authentication, and single MCP tool calls. Use mcp({}) for status, mcp({search: \"query\"}) to find tools, mcp({describe: \"tool\"}) for parameters, and mcp({tool: \"tool\", args: \"{\\\"key\\\":\\\"value\\\"}\"}) for one call. Non-MCP tools should be called directly.";
 }
 
 export function getDirectToolParametersSchema(spec: Pick<DirectToolSpec, "inputSchema">) {

@@ -1,28 +1,21 @@
-# Upstream Sync Playbook (non-rebase model)
+# Upstream Sync Playbook (non-rebase, released-tag-only model)
 
-This document is the source of truth for how this fork (`diegopetrucci/pi-mcp-adapter`, hereafter "the fork") integrates changes from `nicobailon/pi-mcp-adapter` (hereafter "upstream"). It replaces any older guidance that implies repeatedly rebasing TLH deltas on top of `upstream/main`.
+This document is the source of truth for how this fork (`diegopetrucci/pi-mcp-adapter`) integrates changes from `nicobailon/pi-mcp-adapter` (upstream). The fork stays reviewable and close to upstream without replaying TLH changes on `upstream/main`.
 
-This ticket establishes workflow policy only. It does **not** adopt upstream `v2.11.0` or any later release, and it does not change runtime behavior.
+## 1. Intake boundary: released upstream tags only
 
-## 1. Intake unit: upstream release/tag or coherent feature cluster
+A normal intake is exactly one upstream **released version tag** (for example `v2.36.0`) and the commits reachable from that tag that are part of the released history. An upstream release tag is an audit anchor, not the fork's release identity.
 
-The unit of upstream review and integration is one of:
+Do not intake `upstream/main`, a moving branch, a pull request range, or a coherent feature cluster that has not been released. In particular, do not create a synthetic intake from unreleased commits merely because they look related. A later released tag can adopt those changes when the tag is reviewed as a whole. This released-tag-only boundary prevents accidental adoption of work that upstream has not shipped and keeps ledger rows reproducible.
 
-- an upstream **release/tag** (for example `v2.11.0`), or
-- a **coherent feature cluster**: a bounded set of upstream commits that implement one fix/feature together and should be reviewed together.
-
-Per-commit sync is explicitly rejected. Reasons:
-
-- upstream often lands coupled commits that are only safe to reason about as a batch;
-- commit-by-commit triage creates a permanent backlog of half-reviewed SHAs;
-- a release/tag or feature cluster gives a natural, auditable "caught up through here, except for recorded exceptions" boundary.
+The v2.36.0 intake is therefore bounded by upstream tag `v2.36.0` at commit `c00e66b5b959f3327ebefddd93fffe8d402694a3`; commits after that tag, including `upstream/main`, are outside the intake.
 
 ## 2. Integration mechanism: explicit merge or squash-import PRs
 
-Each intake is integrated through one of:
+Each released-tag intake is integrated through one of:
 
 - an explicit **merge PR**, or
-- a **squash-import PR** that brings in the reviewed upstream range as one or a small number of fork commits.
+- a **squash-import PR** that brings in the reviewed released-tag range as one or a small number of fork commits.
 
 The fork's history is **not** kept current by perpetual rebases onto `upstream/main`. Rebase/replay-on-top is rejected because it rewrites fork-only SHAs on every sync, weakens reviewability, and makes the patch history harder to audit.
 
@@ -43,17 +36,17 @@ Field schema:
 | Field | Meaning |
 | --- | --- |
 | `date` | Intake integration date (`YYYY-MM-DD`). |
-| `upstream_ref` | Upstream tag or commit range covered by the intake. |
-| `intake_type` | `release`, `cluster`, or `hotfix`. |
-| `integration_pr` | Fork PR number/link, or `n/a (baseline)` for the one-time baseline row. |
+| `upstream_ref` | Released upstream tag covered by the intake; an isolated urgent hotfix may name its exact commit. |
+| `intake_type` | `release` for a released tag, or exceptional `hotfix` for an isolated urgent fix between release intakes. No `cluster` rows are permitted. |
+| `integration_pr` | Fork PR number/link, or an explicit merge/import reference. |
 | `status` | `adopted`, `adopted-with-exceptions`, `rejected`, or `baseline`. |
 | `exceptions` | Array of `{ "ref": "...", "reason": "..." }` objects; empty array when nothing was excluded. |
-| `notes` | Free-text context for maintainers. |
+| `notes` | Free-text context for maintainers, including the exact merge and upstream tag commits when useful. |
 
 The ledger records only:
 
 - one-time baseline context,
-- one row per real intake,
+- one row per real released-tag intake,
 - explicit exceptions or rejections,
 - high-value notes needed by future maintainers.
 
@@ -65,24 +58,11 @@ A `baseline` row is informational only. It marks the historical fork base and cu
 
 **Path:** `docs/tlh-patch-inventory.md`
 
-This file lists the deliberate fork-only deltas that must be re-checked whenever upstream changes are imported. For this fork, that starts with:
+This file lists the deliberate fork-only deltas and safeguards that must be re-checked whenever a released upstream tag is imported. At minimum, walk the dim connected-server footer, the lazy startup facade versus heavy runtime boundary, scoped package/trusted publishing identity, config ownership/write boundaries, context-bounded model-facing surfaces, and any security regression tests retained from an older backport.
 
-- the dim connected-server footer/status presentation delta,
-- the lazy startup facade versus heavy runtime split,
-- the scoped package identity and npm trusted-publishing release path.
+## 5. Exceptional hotfixes between released-tag intakes
 
-After every merge/squash-import PR, walk the inventory and confirm none of those deltas were silently clobbered.
-
-## 5. Hotfix cherry-picks are allowed only between intakes
-
-Single upstream cherry-picks are reserved for urgent, isolated fixes that cannot wait for the next scheduled intake.
-
-Every such cherry-pick must:
-
-- be genuinely isolated rather than a disguised feature cluster, and
-- receive its own ledger row with `intake_type: "hotfix"` explaining the urgency and noting that the next full intake must reconcile/supersede it.
-
-Hotfix cherry-picks are the exception, not the default sync model.
+A single upstream commit may be recorded as `intake_type: "hotfix"` only when it is urgent, isolated, and cannot wait for the next released tag. It must receive its own ledger row explaining the urgency and stating that the next full released-tag intake must reconcile or supersede it; a hotfix must not broaden the released-tag boundary.
 
 ## 6. Fork release identity stays fork-owned
 
@@ -90,11 +70,12 @@ Upstream sync work must preserve the fork's release identity unless a separately
 
 - `package.json` `name` stays `@diegopetrucci/pi-mcp-adapter`;
 - TLH decides the fork `version`; do not blindly adopt upstream version bumps during intake work;
-- upstream `v*` tags are intake anchors, not fork release tags; do not publish them as the fork's release identity;
+- upstream `v*` tags are intake anchors, not fork release tags, and are never published as the fork's identity;
+- this scoped intake uses fork version `2.36.0` and the planned fork tag `tlh-v2.36.0`;
 - fork releases use `tlh-v*` tags;
 - if an upstream intake adopts a `package-lock.json`, regenerate it from the resolved, scoped fork `package.json` rather than hand-merging the upstream lockfile;
-- fork release/publish workflow remains the trusted-publishing path in `.github/workflows/release.yml`;
-- changelog/docs should preserve both upstream-adopted content and TLH fork release notes when they coexist.
+- fork release/publish workflow remains the trusted-publishing path in `.github/workflows/release.yml`, with dependency installation and public-artifact build before `npm publish --provenance`;
+- changelog/docs should preserve both upstream-adopted context and TLH fork release notes when they coexist.
 
 ## 7. Reporting helpers are non-authoritative
 

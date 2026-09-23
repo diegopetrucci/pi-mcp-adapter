@@ -25,6 +25,23 @@ function createConfig(): McpConfig {
   };
 }
 
+function createFailedPanel(
+  connectionStatus: "failed" | "idle",
+  failureMessage: string | null,
+  width: number,
+): string {
+  const config = createConfig();
+  const callbacks: McpPanelCallbacks = {
+    ...createCallbacks(),
+    getConnectionStatus: () => connectionStatus,
+    getFailureMessage: () => failureMessage,
+  };
+  const panel = createMcpPanel(config, createCache(config), new Map(), callbacks, { requestRender: () => {} }, () => {});
+  const output = stripAnsi(panel.render(width).join("\n"));
+  panel.dispose();
+  return output;
+}
+
 function createCache(config: McpConfig): MetadataCache {
   return {
     version: 1,
@@ -90,6 +107,188 @@ describe("mcp-panel rendering", () => {
     expect(output).not.toContain("\x1b]");
     expect(output).not.toContain("https://example.invalid/notice");
     panel.dispose();
+  });
+
+  it("strips an unterminated OSC payload from notices", () => {
+    const config = createConfig();
+    const panel = createMcpPanel(
+      config,
+      createCache(config),
+      new Map(),
+      createCallbacks(),
+      { requestRender: () => {} },
+      () => {},
+      { noticeLines: ["Open \x1b]8;;https://secret.invalid/truncated"] },
+    );
+
+    const output = stripAnsi(panel.render(120).join("\n"));
+
+    expect(output).toContain("Open");
+    expect(output).not.toContain("https://secret.invalid/truncated");
+    panel.dispose();
+  });
+
+  it("renders the selected failure reason wrapped without truncating useful context", () => {
+    const reason = "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is it running?";
+    const output = createFailedPanel("failed", reason, 60);
+
+    expect(output).toContain("failed");
+    for (const word of reason.split(/\s+/)) expect(output).toContain(word);
+    expect(output.split("\n").filter((line) => /docker/i.test(line)).length).toBeGreaterThan(1);
+    expect(output).not.toContain("…");
+  });
+
+  it("does not render a failure reason when the server is not failed", () => {
+    expect(createFailedPanel("idle", "should not appear", 60)).not.toContain("should not appear");
+  });
+
+  it("updates direct counts and token totals after each toggle", () => {
+    const config: McpConfig = {
+      mcpServers: {
+        example: { command: "mock", directTools: ["alpha"] },
+      },
+    };
+    const cache: MetadataCache = {
+      version: 1,
+      servers: {
+        example: {
+          configHash: computeServerHash(config.mcpServers.example),
+          cachedAt: Date.now(),
+          tools: [{ name: "alpha" }, { name: "beta" }],
+          resources: [],
+        },
+      },
+    };
+    const panel = createMcpPanel(config, cache, new Map(), createCallbacks(), { requestRender: () => {} }, () => {});
+
+    expect(stripAnsi(panel.render(100).join("\n"))).toContain("1 direct  ~12 tokens");
+    panel.handleInput("\r");
+    panel.handleInput("\x1b[B");
+    panel.handleInput("\r");
+    expect(stripAnsi(panel.render(100).join("\n"))).toContain("no direct tools");
+
+    panel.handleInput("\x1b[B");
+    panel.handleInput(" ");
+    expect(stripAnsi(panel.render(100).join("\n"))).toContain("1 direct  ~12 tokens");
+
+    panel.handleInput("\x1b[A");
+    panel.handleInput("\x1b[A");
+    panel.handleInput(" ");
+    const allDirect = stripAnsi(panel.render(100).join("\n"));
+    expect(allDirect).toContain("2/2  ~24");
+    expect(allDirect).toContain("2 direct  ~24 tokens");
+    panel.dispose();
+  });
+
+  it("rebuilds derived totals before requesting a render after reconnect", async () => {
+    const config: McpConfig = {
+      mcpServers: {
+        example: { command: "mock", directTools: ["alpha"] },
+      },
+    };
+    const initialCache: MetadataCache = {
+      version: 1,
+      servers: {
+        example: {
+          configHash: computeServerHash(config.mcpServers.example),
+          cachedAt: Date.now(),
+          tools: [{ name: "alpha" }],
+          resources: [],
+        },
+      },
+    };
+    let status: "idle" | "connected" = "idle";
+    const callbacks: McpPanelCallbacks = {
+      ...createCallbacks(),
+      reconnect: async () => {
+        status = "connected";
+        return true;
+      },
+      getConnectionStatus: () => status,
+      refreshCacheAfterReconnect: () => ({
+        configHash: computeServerHash(config.mcpServers.example),
+        cachedAt: Date.now(),
+        tools: [{ name: "alpha", description: "Expanded alpha description" }, { name: "beta" }],
+        resources: [],
+      }),
+    };
+    const snapshots: string[] = [];
+    let panel!: ReturnType<typeof createMcpPanel>;
+    panel = createMcpPanel(config, initialCache, new Map(), callbacks, {
+      requestRender: () => snapshots.push(stripAnsi(panel.render(100).join("\n"))),
+    }, () => {});
+
+    panel.handleInput("\x12");
+    await Promise.resolve();
+
+    expect(snapshots.at(-1)).toContain("1/2  ~19");
+    expect(snapshots.at(-1)).toContain("1 direct  ~19 tokens");
+    panel.dispose();
+  });
+
+  it("does not report cached data when reconnect returns no cache entry", async () => {
+    const config: McpConfig = {
+      mcpServers: {
+        example: { command: "mock" },
+      },
+    };
+    let connectionStatus: "idle" | "connected" = "idle";
+    const callbacks: McpPanelCallbacks = {
+      ...createCallbacks(),
+      reconnect: async () => {
+        connectionStatus = "connected";
+        return true;
+      },
+      getConnectionStatus: () => connectionStatus,
+      refreshCacheAfterReconnect: () => null,
+    };
+    const panel = createMcpPanel(config, null, new Map(), callbacks, { requestRender: () => {} }, () => {});
+
+    panel.handleInput("\x12");
+    await Promise.resolve();
+
+    expect(stripAnsi(panel.render(100).join("\n"))).toContain("example  (not cached)");
+    panel.dispose();
+  });
+
+  it("shows zero-TTL metadata after reconnect but not when the panel is reopened", async () => {
+    const config: McpConfig = {
+      mcpServers: {
+        example: { command: "mock" },
+      },
+    };
+    const cache: MetadataCache = { version: 1, servers: {} };
+    const refreshedEntry = {
+      configHash: computeServerHash(config.mcpServers.example),
+      cachedAt: Date.now(),
+      ttlMs: 0,
+      tools: [{ name: "search" }],
+      resources: [],
+    };
+    let connectionStatus: "idle" | "connected" = "idle";
+    const callbacks: McpPanelCallbacks = {
+      ...createCallbacks(),
+      reconnect: async () => {
+        connectionStatus = "connected";
+        return true;
+      },
+      getConnectionStatus: () => connectionStatus,
+      refreshCacheAfterReconnect: () => refreshedEntry,
+    };
+    const panel = createMcpPanel(config, cache, new Map(), callbacks, { requestRender: () => {} }, () => {});
+
+    panel.handleInput("\x12");
+    await Promise.resolve();
+
+    const currentOutput = stripAnsi(panel.render(100).join("\n"));
+    expect(currentOutput).toContain("example  0/1");
+    expect(currentOutput).not.toContain("(not cached)");
+    panel.dispose();
+
+    const reopenedPanel = createMcpPanel(config, cache, new Map(), callbacks, { requestRender: () => {} }, () => {});
+    const reopenedOutput = stripAnsi(reopenedPanel.render(100).join("\n"));
+    expect(reopenedOutput).toContain("example  (not cached)");
+    reopenedPanel.dispose();
   });
 
   it("keeps dirty changes and closes when Keep & Close is confirmed", () => {

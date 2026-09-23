@@ -8,16 +8,21 @@ const mocks = vi.hoisted(() => ({
   saveMetadataCache: vi.fn(),
   loadMetadataCache: vi.fn(() => ({ version: 1, servers: {} })),
   isServerCacheValid: vi.fn(() => false),
+  getMissingConfiguredDirectToolServers: vi.fn(() => []),
   reconstructToolMetadata: vi.fn(() => []),
   buildToolMetadata: vi.fn(() => ({ metadata: [], failedTools: [] })),
   totalToolCount: vi.fn(() => 0),
-  getMissingConfiguredDirectToolServers: vi.fn(() => []),
   parallelLimit: vi.fn(async (items: any[], _limit: number, mapper: (item: any) => Promise<any>) => Promise.all(items.map(mapper))),
   loggerDebug: vi.fn(),
 }));
 
 vi.mock("node:fs", () => ({ existsSync: mocks.existsSync }));
-vi.mock("../config.ts", () => ({ loadMcpConfig: mocks.loadMcpConfig }));
+vi.mock("../config.ts", () => ({
+  cloneMcpConfig: vi.fn((config) => config),
+  loadMcpConfig: mocks.loadMcpConfig,
+  resolveConfiguredClaudePluginMcp: vi.fn((config) => config),
+  resolveConfiguredOAuthDir: vi.fn(),
+}));
 vi.mock("../server-manager.ts", () => ({ McpServerManager: mocks.managerFactory }));
 vi.mock("../lifecycle.ts", () => ({ McpLifecycleManager: mocks.lifecycleFactory }));
 vi.mock("../ui-resource-handler.ts", () => ({ UiResourceHandler: vi.fn(() => ({})) }));
@@ -26,6 +31,7 @@ vi.mock("../metadata-cache.ts", () => ({
   computeServerHash: vi.fn(),
   getMetadataCachePath: vi.fn(() => "/tmp/mcp-cache.json"),
   isServerCacheValid: mocks.isServerCacheValid,
+  getMissingConfiguredDirectToolServers: mocks.getMissingConfiguredDirectToolServers,
   loadMetadataCache: mocks.loadMetadataCache,
   reconstructToolMetadata: mocks.reconstructToolMetadata,
   saveMetadataCache: mocks.saveMetadataCache,
@@ -37,8 +43,10 @@ vi.mock("../tool-metadata.ts", () => ({
   totalToolCount: mocks.totalToolCount,
 }));
 vi.mock("../utils.ts", () => ({
+  formatMcpStatus: vi.fn(),
   openUrl: vi.fn(),
   parallelLimit: mocks.parallelLimit,
+  sanitizeTerminalText: vi.fn((value) => String(value)),
 }));
 vi.mock("../direct-tools.ts", () => ({
   getMissingConfiguredDirectToolServers: mocks.getMissingConfiguredDirectToolServers,
@@ -48,6 +56,7 @@ vi.mock("../logger.ts", () => ({ logger: { debug: mocks.loggerDebug } }));
 function createManager(connectImpl: (name: string, definition: unknown, signal?: AbortSignal) => Promise<unknown>) {
   return {
     setDefaultRequestTimeoutMs: vi.fn(),
+    setAuthStorageOptions: vi.fn(),
     setSamplingConfig: vi.fn(),
     setElicitationConfig: vi.fn(),
     connect: vi.fn(connectImpl),
@@ -65,6 +74,9 @@ function createLifecycle() {
     registerServer: vi.fn(),
     markKeepAlive: vi.fn(),
     setReconnectCallback: vi.fn(),
+    setReconnectFailureCallback: vi.fn(),
+    setHealthRestoredCallback: vi.fn(),
+    setAuthRequiredCallback: vi.fn(),
     setIdleShutdownCallback: vi.fn(),
     startHealthChecks: vi.fn(),
   };
@@ -112,6 +124,30 @@ describe("initializeMcp cancellation", () => {
     expect(consoleError).not.toHaveBeenCalled();
 
     consoleError.mockRestore();
+  });
+
+  it("rethrows initial cancellation when transport throws a different AbortError", async () => {
+    const controller = new AbortController();
+    const initialAbort = new Error("user cancelled");
+    const transportAbort = new Error("transport aborted");
+    transportAbort.name = "AbortError";
+    const manager = createManager(async () => {
+      controller.abort(initialAbort);
+      throw transportAbort;
+    });
+    const lifecycle = createLifecycle();
+    mocks.managerFactory.mockImplementation(() => manager);
+    mocks.lifecycleFactory.mockImplementation(() => lifecycle);
+    mocks.loadMcpConfig.mockReturnValue({
+      mcpServers: { demo: { command: "node", args: ["server.js"], lifecycle: "eager" } },
+      settings: {},
+    });
+
+    const ui = { setStatus: vi.fn(), notify: vi.fn() };
+    const { initializeMcp } = await import("../init.ts");
+
+    await expect(initializeMcp(extensionApi(), { cwd: "/tmp", hasUI: true, ui, signal: controller.signal } as any)).rejects.toBe(initialAbort);
+    expect(ui.notify).not.toHaveBeenCalled();
   });
 
   it("rethrows direct-bootstrap aborts without logging bootstrap failures", async () => {

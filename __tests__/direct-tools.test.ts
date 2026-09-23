@@ -25,44 +25,16 @@ afterEach(() => {
 });
 
 describe("buildProxyDescription", () => {
-  it("documents the ui-messages action", () => {
-    const config: McpConfig = {
-      mcpServers: {
-        demo: {
-          command: "npx",
-          args: ["-y", "demo-server"],
-        },
-      },
-    };
+  it("keeps the gateway description fixed and bounded", () => {
+    const description = buildProxyDescription({ mcpServers: {} });
 
-    const cache: MetadataCache = {
-      version: 1,
-      servers: {
-        demo: {
-          configHash: "hash",
-          cachedAt: Date.now(),
-          tools: [
-            {
-              name: "launch_app",
-              description: "Launch the demo app",
-              inputSchema: { type: "object", properties: {} },
-            },
-          ],
-          resources: [],
-        },
-      },
-    };
-
-    const description = buildProxyDescription(config, cache, []);
-
-    expect(description).toContain('mcp({ action: "ui-messages" })');
-    expect(description).toContain("Retrieve accumulated messages from completed UI sessions");
-    expect(description).toContain("Search MCP tools by name/description");
-    expect(description).toContain("Non-MCP Pi tools should be called directly, not through mcp.");
-    expect(description).not.toContain("MCP + pi");
+    expect(description).toContain("MCP gateway for server status");
+    expect(description).toContain("tool search");
+    expect(description).toContain("Non-MCP tools should be called directly");
+    expect(description).not.toMatch(/URL|install|Jev|TypeSafe|Servers:|Disabled/);
   });
 
-  it("excludes configured tools from proxy summaries", () => {
+  it("does not include configured server or tool lists in the gateway description", () => {
     const config: McpConfig = {
       settings: { toolPrefix: "server" },
       mcpServers: {
@@ -93,8 +65,8 @@ describe("buildProxyDescription", () => {
 
     const description = buildProxyDescription(config, cache, []);
 
-    expect(description).toContain("Servers: figma (1 tools)");
-    expect(description).not.toContain("figma (3 tools)");
+    expect(description).not.toContain("figma");
+    expect(description).not.toContain("get_screenshot");
   });
 });
 
@@ -232,7 +204,7 @@ describe("excludeTools filtering", () => {
     const definition = {
       command: "npx",
       args: ["-y", "figma"],
-      excludeTools: ["figma_get_screenshot", "get_figjam"],
+      excludeTools: ["figma_get_screenshot", "read_figjam"],
     };
 
     const { metadata } = buildToolMetadata(

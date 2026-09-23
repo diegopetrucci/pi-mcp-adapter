@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   openMcpAuthPanel: vi.fn(),
   openMcpPanel: vi.fn(),
   openMcpSetup: vi.fn(),
+  editSharedConfig: vi.fn(),
   executeAuthComplete: vi.fn(),
   executeAuthStart: vi.fn(),
   executeCall: vi.fn(),
@@ -50,6 +51,7 @@ vi.mock("../commands.ts", () => ({
   openMcpAuthPanel: mocks.openMcpAuthPanel,
   openMcpPanel: mocks.openMcpPanel,
   openMcpSetup: mocks.openMcpSetup,
+  editSharedConfig: mocks.editSharedConfig,
 }));
 
 vi.mock("../proxy-modes.ts", () => ({
@@ -186,15 +188,20 @@ describe("mcp runtime", () => {
     await runtime.handleMcpCommand("reconnect demo", ctx);
     await runtime.handleMcpCommand("tools", ctx);
     await runtime.handleMcpCommand("setup", ctx);
+    mocks.editSharedConfig.mockResolvedValue(true);
+    await runtime.handleMcpCommand("edit", ctx);
+    await runtime.handleMcpCommand("edit global", ctx);
     await runtime.handleMcpCommand("logout oauth-server", ctx);
     await runtime.handleMcpCommand("", ctx);
 
     expect(mocks.reconnectServers).toHaveBeenCalledWith(state, ctx, "demo");
     expect(mocks.showTools).toHaveBeenCalledWith(state, ctx);
     expect(mocks.openMcpSetup).toHaveBeenCalledWith(state, expect.any(Object), ctx, "/tmp/mcp.json", "setup");
-    expect(ctx.reload).toHaveBeenCalledTimes(1);
+    expect(ctx.reload).toHaveBeenCalledTimes(3);
+    expect(mocks.editSharedConfig).toHaveBeenNthCalledWith(1, ctx, "project");
+    expect(mocks.editSharedConfig).toHaveBeenNthCalledWith(2, ctx, "global");
     expect(mocks.logoutServer).toHaveBeenCalledWith("oauth-server", state, ctx);
-    expect(mocks.openMcpPanel).toHaveBeenCalledWith(state, expect.any(Object), ctx, "/tmp/mcp.json");
+    expect(mocks.openMcpPanel).toHaveBeenCalledWith(state, expect.any(Object), ctx, "/tmp/mcp.json", expect.any(Function));
   });
 
   it("routes mcp-auth commands through the existing auth handlers", async () => {
@@ -214,6 +221,69 @@ describe("mcp runtime", () => {
 
     expect(mocks.openMcpAuthPanel).toHaveBeenCalledWith(state, expect.any(Object), ctx, "/tmp/mcp.json");
     expect(mocks.authenticateServer).toHaveBeenCalledWith("github", state.config, ctx);
+  });
+
+  it("refreshes direct tools after a persisted panel change even when direct tools are frozen", async () => {
+    const state = createState();
+    state.config = {
+      settings: { freezeDirectTools: true },
+      mcpServers: { demo: { command: "demo", directTools: false } },
+    };
+    mocks.initializeMcp.mockResolvedValue(state);
+    const sync = vi.fn();
+    const toolSurface = { sync, activateSearchMatches: vi.fn() };
+    let applyChanges!: (changes: Map<string, true | string[] | false>) => void | Promise<void>;
+    mocks.openMcpPanel.mockImplementation(async (...args: any[]) => {
+      applyChanges = args[4];
+      return { configChanged: false };
+    });
+
+    const { createMcpRuntime } = await import("../mcp-runtime.ts");
+    const runtime = createMcpRuntime(createPi(), { toolSurface });
+    const ctx = { hasUI: true, ui: { notify: vi.fn() } } as any;
+
+    await runtime.handleSessionStart({}, ctx);
+    await runtime.waitForInitialization?.();
+    await runtime.handleMcpCommand("", ctx);
+
+    expect(applyChanges).toBeTypeOf("function");
+    await applyChanges(new Map([["demo", ["search"]]]));
+
+    expect(state.config.mcpServers.demo.directTools).toEqual(["search"]);
+    expect(sync).toHaveBeenNthCalledWith(2, state, ctx, false, expect.any(Object), { forceDirectTools: true });
+  });
+
+  it("ignores a panel refresh callback after the runtime session is replaced", async () => {
+    const firstState = createState();
+    firstState.config = { mcpServers: { demo: { command: "demo", directTools: false } } };
+    const replacementState = createState();
+    replacementState.config = { mcpServers: { demo: { command: "demo", directTools: false } } };
+    mocks.initializeMcp.mockResolvedValueOnce(firstState).mockResolvedValueOnce(replacementState);
+    const sync = vi.fn();
+    let staleApply!: (changes: Map<string, true | string[] | false>) => void | Promise<void>;
+    mocks.openMcpPanel.mockImplementationOnce(async (...args: any[]) => {
+      staleApply = args[4];
+      return { configChanged: false };
+    });
+
+    const { createMcpRuntime } = await import("../mcp-runtime.ts");
+    const runtime = createMcpRuntime(createPi(), {
+      toolSurface: { sync, activateSearchMatches: vi.fn() },
+    });
+    const firstCtx = { hasUI: true, ui: { notify: vi.fn() } } as any;
+    const replacementCtx = { hasUI: true, ui: { notify: vi.fn() } } as any;
+
+    await runtime.handleSessionStart({}, firstCtx);
+    await runtime.waitForInitialization?.();
+    await runtime.handleMcpCommand("", firstCtx);
+
+    await runtime.handleSessionStart({}, replacementCtx);
+    await runtime.waitForInitialization?.();
+    await staleApply(new Map([["demo", true]]));
+
+    expect(firstState.config.mcpServers.demo.directTools).toBe(false);
+    expect(replacementState.config.mcpServers.demo.directTools).toBe(false);
+    expect(sync).toHaveBeenCalledTimes(2);
   });
 
   it("routes proxy calls through the existing proxy handlers", async () => {
@@ -260,6 +330,46 @@ describe("mcp runtime", () => {
     expect(mocks.executeSearch).toHaveBeenCalledWith(state, "demo", true, "demo", false);
     expect(mocks.executeList).toHaveBeenCalledWith(state, "demo");
     expect(mocks.executeStatus).toHaveBeenCalledWith(state);
+  });
+
+  it("keeps session_start non-blocking while initialization continues in the runtime", async () => {
+    const pendingInit = createDeferred<any>();
+    mocks.initializeMcp.mockReturnValue(pendingInit.promise);
+
+    const { createMcpRuntime } = await import("../mcp-runtime.ts");
+    const runtime = createMcpRuntime(createPi(), {});
+
+    await runtime.handleSessionStart({}, {} as any);
+    expect(mocks.initializeMcp).toHaveBeenCalledTimes(1);
+
+    pendingInit.resolve(createState());
+    await expect(runtime.waitForInitialization?.()).resolves.toBe("ready");
+    await runtime.handleSessionShutdown();
+  });
+
+  it("returns one stable timeout result from the runtime-owned initialization budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const pendingInit = createDeferred<any>();
+      mocks.initializeMcp.mockReturnValue(pendingInit.promise);
+
+      const { createMcpRuntime } = await import("../mcp-runtime.ts");
+      const runtime = createMcpRuntime(createPi(), {});
+      await runtime.handleSessionStart({}, {} as any);
+
+      const resultPromise = runtime.executeProxyTool("call-timeout", { tool: "demo_search" });
+      await vi.advanceTimersByTimeAsync(30_000);
+      await expect(resultPromise).resolves.toMatchObject({
+        content: [{ text: "MCP initialization is still in progress. Try again shortly." }],
+        details: { error: "init_timeout", timeoutMs: 30_000 },
+      });
+
+      pendingInit.resolve(createState());
+      await expect(runtime.waitForInitialization?.()).resolves.toBe("ready");
+      await runtime.handleSessionShutdown();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rethrows proxy-tool cancellation while initialization is still pending", async () => {
