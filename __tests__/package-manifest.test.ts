@@ -59,7 +59,7 @@ describe("TLH package identity and release evidence", () => {
     expect(releaseWorkflow).toContain("default: tlh-v2.36.0");
     expect(releaseWorkflow.indexOf("npm ci")).toBeLessThan(releaseWorkflow.indexOf("npm publish"));
     expect(releaseWorkflow.indexOf("npm run build:public")).toBeLessThan(releaseWorkflow.indexOf("npm publish"));
-    expect(changelog).toContain("### TLH fork release - 2026-09-22 (adopted-with-exceptions)");
+    expect(changelog).toContain("### TLH fork release - 2026-09-23 (adopted-with-exceptions)");
     expect(changelog).toContain("> **Inherited upstream history (2.12–2.35):** retained for context only; the URL installer and Jev/TypeSafe integrations are excluded from this fork.");
     expect(changelog).toContain("pi install npm:@diegopetrucci/pi-mcp-adapter@2.36.0");
     expect(changelog).toContain("docs/UPSTREAM-SYNC.md");
