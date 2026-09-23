@@ -24,15 +24,21 @@ function writeManifest(plugin: string, name: string): void {
 describe("Claude plugin bundles", () => {
   const roots: string[] = [];
   const originalHome = process.env.HOME;
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
   const originalCwd = process.cwd();
 
   beforeEach(() => {
     vi.resetModules();
+    // Each fixture owns its HOME; do not let a host agent-dir override route
+    // config discovery back into the caller's live state.
+    delete process.env.PI_CODING_AGENT_DIR;
   });
 
   afterEach(() => {
     vi.doUnmock("node:fs");
     process.env.HOME = originalHome;
+    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
     process.chdir(originalCwd);
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
     vi.restoreAllMocks();

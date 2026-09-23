@@ -23,9 +23,9 @@ const cacheWithResources = (entries: Array<[string, { definition: ServerEntry; t
   }])),
 });
 
-const configFor = (mcpServers: Record<string, ServerEntry>, settings?: McpConfig["settings"]): McpConfig => ({
+const configFor = (mcpServers: Record<string, ServerEntry>, settings: McpConfig["settings"] = { namespaceProxyTools: true }): McpConfig => ({
   mcpServers,
-  ...(settings ? { settings } : {}),
+  settings,
 });
 
 describe("parseMcpReference", () => {
@@ -94,6 +94,18 @@ describe("resolveMcpToolReferences", () => {
 
     expect(resolveMcpToolReferences(["mcp:demo/search"], config, cache).names).toEqual(["demo_search"]);
     expect(resolveMcpToolReferences(["mcp:demo_search"], config, cache).names).toEqual(["demo_search"]);
+  });
+
+  it("does not resolve proxy-only references to a namespace proxy by default", () => {
+    const definition: ServerEntry = { command: "demo" };
+    const result = resolveMcpToolReferences(
+      ["mcp:demo/demo_search"],
+      { mcpServers: { demo: definition } },
+      cacheFor([["demo", { definition, tools: [{ name: "search" }] }]]),
+    );
+
+    expect(result.names).toEqual([]);
+    expect(result.diagnostics).toHaveLength(1);
   });
 
   it("resolves proxy-only server/tool references to the namespace proxy after validating the tool", () => {

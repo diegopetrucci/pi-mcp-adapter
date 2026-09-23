@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { GetPromptResult } from "@modelcontextprotocol/client";
 import {
   createPromptCommand,
+  McpInitializationPendingError,
+  MCP_INITIALIZATION_PENDING_MESSAGE,
   formatPromptResult,
   listAllPromptMetadata,
   parsePromptArgs,
@@ -203,6 +205,20 @@ describe("formatPromptResult", () => {
 });
 
 describe("createPromptCommand handler", () => {
+  it("reports one stable notification when initialization is still pending", async () => {
+    const pi = { sendUserMessage: vi.fn() } as unknown as ExtensionAPI;
+    const notify = vi.fn();
+    const command = createPromptCommand(pi, () => null, meta(), {
+      ensureState: vi.fn().mockRejectedValue(new McpInitializationPendingError()),
+    });
+
+    await expect(command.handler("ai", commandCtx({ hasUI: true, ui: { notify } as any }))).resolves.toBeUndefined();
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith(MCP_INITIALIZATION_PENDING_MESSAGE, "info");
+    expect(pi.sendUserMessage).not.toHaveBeenCalled();
+  });
+
   it("notifies and returns when deferred initialization fails", async () => {
     const pi = { sendUserMessage: vi.fn() } as unknown as ExtensionAPI;
     const notify = vi.fn();

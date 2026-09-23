@@ -310,7 +310,12 @@ export function normalizeDirectToolInputSchema(schema) {
         ? schema
         : { type: "object", properties: {} };
     const { $schema, additionalProperties, ...normalized } = inputSchema;
-    return normalized;
+    if (additionalProperties === false) {
+        return normalized;
+    }
+    return additionalProperties === undefined
+        ? normalized
+        : { ...normalized, additionalProperties };
 }
 export function normalizeToolArguments(value, context = "tool arguments") {
     if (value === undefined || value === null || value === "")

@@ -24,7 +24,7 @@ import { McpServerManager, isTransientHttpConnectError } from "./server-manager.
 import { buildToolMetadata, totalToolCount } from "./tool-metadata.ts";
 import { resourceNameToToolName } from "./resource-tools.ts";
 import { UiResourceHandler } from "./ui-resource-handler.ts";
-import { formatMcpFooterStatus, formatMcpStatus, openUrl, parallelLimit, sanitizeTerminalText } from "./utils.ts";
+import { formatMcpStatus, openUrl, parallelLimit, sanitizeTerminalText } from "./utils.ts";
 import { logger } from "./logger.ts";
 import { throwIfAborted } from "./abort.ts";
 import { getAuthStorageOptions } from "./mcp-auth.ts";
@@ -46,6 +46,11 @@ export { getFailureAgeSeconds, getFailureMessage, isServerInActiveFailureBackoff
 
 const MAX_FAILURE_MESSAGE_CHARS = 8 * 1024;
 const failureExpiryTimers = new WeakMap<McpExtensionState, Map<string, ReturnType<typeof setTimeout>>>();
+
+function isInitialCancellation(error: unknown, signal: AbortSignal | undefined): boolean {
+  if (!signal?.aborted) return false;
+  return error === signal.reason || error instanceof Error && error.name === "AbortError";
+}
 
 function getFailureExpiryTimers(state: McpExtensionState): Map<string, ReturnType<typeof setTimeout>> {
   let timers = failureExpiryTimers.get(state);
@@ -217,6 +222,7 @@ export async function initializeMcp(
     consentManager,
     uiServer: null,
     completedUiSessions: [],
+    sessionCwd: cwd,
     openBrowser: async (url: string) => {
       owner.throwIfInactive();
       await openUrl(pi, url, process.env.BROWSER, owner.signal);
@@ -246,7 +252,7 @@ export async function initializeMcp(
   manager.setMetadataListChangedListener?.((serverName, reason) => {
     if (!owner.isActive()) return;
     updateServerMetadata(state, serverName);
-    updateMetadataCache(state, serverName);
+    updateMetadataCache(state, serverName, state.sessionCwd);
     notifyToolMetadataUpdated(state, serverName, reason);
     updateStatusBar(state);
   });
@@ -308,14 +314,14 @@ export async function initializeMcp(
     }
 
     const cachedEntry = cache?.servers?.[name];
-    if (cachedEntry && isServerCacheValid(cachedEntry, definition)) {
+    if (cachedEntry && isServerCacheValid(cachedEntry, definition, undefined, cwd)) {
       const hasToolFilters =
         (Array.isArray(definition.includeTools) && definition.includeTools.length > 0) ||
         (Array.isArray(definition.excludeTools) && definition.excludeTools.length > 0);
       if (hasToolFilters && !cachedSelectorCandidateIndex && cache) {
-        cachedSelectorCandidateIndex = createCachedToolSelectorCandidateIndex(config.mcpServers, cache, prefix);
+        cachedSelectorCandidateIndex = createCachedToolSelectorCandidateIndex(config.mcpServers, cache, prefix, cwd);
       }
-      const metadata = reconstructToolMetadata(name, cachedEntry, prefix, definition, config.mcpServers, cache ?? undefined, cachedSelectorCandidateIndex);
+      const metadata = reconstructToolMetadata(name, cachedEntry, prefix, definition, config.mcpServers, cache ?? undefined, cachedSelectorCandidateIndex, cwd);
       toolMetadata.set(name, metadata);
       if (Array.isArray(cachedEntry.resources)) {
         resourceCounts.set(name, cachedEntry.resources.length);
@@ -349,6 +355,9 @@ export async function initializeMcp(
       }
       return { name, definition, connection, error: null, transient: false };
     } catch (error) {
+      if (isInitialCancellation(error, initialSignal) && owner.isActive()) {
+        throwIfAborted(initialSignal);
+      }
       if (isAbortError(error, runtimeSignal)) {
         if (owner.signal.aborted) throw error;
         return { name, definition, connection: null, error: null, transient: false };
@@ -417,7 +426,7 @@ export async function initializeMcp(
     } else {
       serverInstructions.delete(name);
     }
-    updateMetadataCache(state, name);
+    updateMetadataCache(state, name, state.sessionCwd);
     notifyToolMetadataUpdated(state, name, "startup");
     markKeepAliveAfterConnect(state, name);
 
@@ -443,7 +452,7 @@ export async function initializeMcp(
   if (envDirect !== "__none__") {
     const currentCache = loadMetadataCache();
     const envDirectToolOverride = envDirect?.split(",").map(selector => selector.trim()).filter(Boolean);
-    const missingCacheServers = getMissingConfiguredDirectToolServers(config, currentCache, envDirectToolOverride);
+    const missingCacheServers = getMissingConfiguredDirectToolServers(config, currentCache, envDirectToolOverride, cwd);
 
     if (missingCacheServers.length > 0) {
       const bootstrapResults = await parallelLimit(
@@ -458,12 +467,15 @@ export async function initializeMcp(
               return { name, ok: false };
             }
             updateServerMetadata(state, name);
-            updateMetadataCache(state, name);
+            updateMetadataCache(state, name, state.sessionCwd);
             const restored = clearFailure(state, name, "direct-tools-bootstrap");
             if (!restored) notifyToolMetadataUpdated(state, name, "direct-tools-bootstrap");
             markKeepAliveAfterConnect(state, name);
             return { name, ok: true };
           } catch (error) {
+            if (isInitialCancellation(error, initialSignal) && owner.isActive()) {
+              throwIfAborted(initialSignal);
+            }
             if (isAbortError(error, runtimeSignal)) {
               if (owner.signal.aborted) throw error;
               return { name, ok: false };
@@ -486,7 +498,7 @@ export async function initializeMcp(
   lifecycle.setReconnectCallback((serverName) => {
     if (!owner.isActive()) return;
     updateServerMetadata(state, serverName);
-    updateMetadataCache(state, serverName);
+    updateMetadataCache(state, serverName, state.sessionCwd);
     const restored = clearFailure(state, serverName, "lifecycle-reconnect");
     if (!restored) notifyToolMetadataUpdated(state, serverName, "lifecycle-reconnect");
     updateStatusBar(state);
@@ -575,6 +587,7 @@ export function updateServerMetadata(state: McpExtensionState, serverName: strin
 export function updateMetadataCache(
   state: McpExtensionState,
   serverName: string,
+  defaultCwd = state.sessionCwd,
 ): void {
   if (state.provisionalInstalls?.has(serverName)) return;
   const connection = state.manager.getConnection(serverName);
@@ -583,7 +596,7 @@ export function updateMetadataCache(
   const definition = state.config.mcpServers[serverName];
   if (!definition || isServerDisabled(definition)) return;
 
-  const configHash = computeServerHash(definition);
+  const configHash = computeServerHash(definition, defaultCwd);
   const existing = loadMetadataCache();
   const existingEntry = existing?.servers?.[serverName];
 
@@ -597,7 +610,7 @@ export function updateMetadataCache(
     definition.exposeResources !== false &&
     connection.resourceDiscoveryFailed === true &&
     existingEntry?.resources?.length &&
-    isServerCacheValid(existingEntry, definition)
+    isServerCacheValid(existingEntry, definition, undefined, defaultCwd)
   ) {
     resources = existingEntry.resources;
   }
@@ -634,7 +647,7 @@ export function notifyToolMetadataUpdated(state: McpExtensionState, serverName: 
 export function flushMetadataCache(state: McpExtensionState): void {
   for (const [name, connection] of state.manager.getAllConnections()) {
     if (connection.status === "connected") {
-      updateMetadataCache(state, name);
+      updateMetadataCache(state, name, state.sessionCwd);
     }
   }
 }
@@ -644,14 +657,16 @@ export function updateStatusBar(state: McpExtensionState): void {
   const ui = state.ui;
   if (!ui) return;
 
-  const entries = Object.entries(state.config.mcpServers);
+  const entries = Object.entries(state.config.mcpServers)
+    .filter(([, definition]) => !isServerDisabled(definition));
   if (entries.length === 0 || state.config.settings?.mcpFooterStatus === "off") {
     ui.setStatus("mcp", undefined);
     return;
   }
 
+  const enabledServers = new Set(entries.map(([name]) => name));
   const connected = [...state.manager.getAllConnections()]
-    .filter(([name, connection]) => connection.status === "connected" && state.config.mcpServers[name] !== undefined);
+    .filter(([name, connection]) => connection.status === "connected" && enabledServers.has(name));
   if (state.config.settings?.mcpFooterStatus === "compact") {
     ui.setStatus("mcp", `MCP ${connected.length}/${entries.length}`);
     return;
@@ -696,7 +711,7 @@ export async function lazyConnect(state: McpExtensionState, serverName: string, 
       return false;
     }
     updateServerMetadata(state, serverName);
-    updateMetadataCache(state, serverName);
+    updateMetadataCache(state, serverName, state.sessionCwd);
     const restored = clearFailure(state, serverName, "lazy-connect");
     if (!restored) notifyToolMetadataUpdated(state, serverName, "lazy-connect");
     markKeepAliveAfterConnect(state, serverName);

@@ -134,8 +134,9 @@ export function createDirectToolExecutor(
 
     if (!state && initPromise) {
       try {
-        state = await initPromise;
+        state = await abortable(initPromise, signal);
       } catch (error) {
+        throwIfAborted(signal);
         const message = error instanceof Error ? error.message : String(error);
         return {
           content: [{ type: "text" as const, text: `MCP initialization failed: ${message}` }],

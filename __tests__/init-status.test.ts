@@ -75,7 +75,7 @@ describe("updateStatusBar", () => {
     expect(setStatus).toHaveBeenCalledWith("mcp", "MCP: 0/1 servers");
   });
 
-  it("counts configured disabled entries while listing connected names", () => {
+  it("excludes disabled entries while listing connected names", () => {
     const setStatus = vi.fn();
     const state = createState({
       setStatus,
@@ -88,7 +88,7 @@ describe("updateStatusBar", () => {
 
     updateStatusBar(state);
 
-    expect(setStatus).toHaveBeenCalledWith("mcp", "styled:MCP: 1/2 servers, demo");
+    expect(setStatus).toHaveBeenCalledWith("mcp", "styled:MCP: 1/1 servers, demo");
   });
 
   it("can show a compact connected/configured footer", () => {

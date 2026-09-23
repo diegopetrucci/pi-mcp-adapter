@@ -148,7 +148,7 @@ describe("commands onboarding", () => {
     expect(options.theme).toBe(ui.theme);
   });
 
-  it("does not present an .agents-only config as canonical shared MCP config", async () => {
+  it("detects an .agents-only config without presenting it as canonical shared MCP config", async () => {
     const home = mkdtempSync(join(tmpdir(), "pi-mcp-commands-agents-home-"));
     const project = mkdtempSync(join(tmpdir(), "pi-mcp-commands-agents-project-"));
     process.env.HOME = home;
@@ -171,9 +171,11 @@ describe("commands onboarding", () => {
       failureTracker: new Map(),
     } as any, { getFlag: () => undefined } as any, { hasUI: true, mode: "tui", ui, cwd: process.cwd() } as any);
 
-    expect(mocks.createMcpPanel).toHaveBeenCalled();
-    const options = mocks.createMcpPanel.mock.calls[0]?.[6];
-    expect(options.noticeLines).toEqual([]);
+    expect(mocks.createMcpSetupPanel).toHaveBeenCalled();
+    const discovery = mocks.createMcpSetupPanel.mock.calls[0]?.[0];
+    expect(discovery.sources).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "agents-global", serverCount: 1, active: false }),
+    ]));
   });
 
   it("writes known-server setup choices to the selected global shared config", async () => {
@@ -182,7 +184,7 @@ describe("commands onboarding", () => {
     process.env.HOME = home;
     process.chdir(project);
     mocks.createMcpSetupPanel.mockImplementationOnce((_discovery, callbacks, _options, _tui, done) => {
-      void callbacks.addKnownServer({ id: "demo", name: "Demo", summary: "Demo server", entry: { command: "demo" } }, "global")
+      void callbacks.addKnownServer({ id: "demo", name: "Demo", summary: "Demo server", entry: { command: "demo", directTools: true } }, "global")
         .then(() => done());
       return { dispose() {} };
     });
@@ -197,6 +199,49 @@ describe("commands onboarding", () => {
       mcpServers: {
         demo: { command: "demo" },
       },
+    });
+    expect(JSON.parse(readFileSync(join(home, ".pi", "agent", "mcp.json"), "utf-8"))).toEqual({
+      mcpServers: {
+        demo: { directTools: true },
+      },
+    });
+  });
+
+  it("keeps adapter-only known-server settings in the Pi project override", async () => {
+    const home = mkdtempSync(join(tmpdir(), "pi-mcp-commands-adapter-home-"));
+    const project = mkdtempSync(join(tmpdir(), "pi-mcp-commands-adapter-project-"));
+    process.env.HOME = home;
+    process.chdir(project);
+    mocks.createMcpSetupPanel.mockImplementationOnce((_discovery, callbacks, _options, _tui, done) => {
+      const preset = {
+        id: "parallel-search",
+        name: "Parallel Search",
+        summary: "Search",
+        entry: { url: "https://search.parallel.ai/mcp", directTools: true },
+      };
+      const previews = callbacks.previewKnownServer(preset, "project");
+      expect(previews).toHaveLength(2);
+      expect(previews[0]?.path).toBe(join(project, ".mcp.json"));
+      expect(previews[0]?.beforeText).toBe("");
+      expect(previews[0]?.afterText).not.toContain("directTools");
+      expect(previews[1]?.path).toBe(join(project, ".pi", "mcp.json"));
+      expect(previews[1]?.beforeText).toBe("");
+      expect(previews[1]?.afterText).toContain("directTools");
+      expect(existsSync(join(project, ".mcp.json"))).toBe(false);
+      expect(existsSync(join(project, ".pi", "mcp.json"))).toBe(false);
+      void callbacks.addKnownServer(preset, "project").then(() => done());
+      return { dispose() {} };
+    });
+
+    const ui = createUi();
+    const { openMcpSetup } = await import("../commands.ts");
+    await openMcpSetup({ config: { mcpServers: {} } } as any, {} as any, { hasUI: true, mode: "tui", ui, cwd: project } as any);
+
+    expect(JSON.parse(readFileSync(join(project, ".mcp.json"), "utf-8"))).toEqual({
+      mcpServers: { "parallel-search": { url: "https://search.parallel.ai/mcp" } },
+    });
+    expect(JSON.parse(readFileSync(join(project, ".pi", "mcp.json"), "utf-8"))).toEqual({
+      mcpServers: { "parallel-search": { directTools: true } },
     });
   });
 

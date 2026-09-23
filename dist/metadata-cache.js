@@ -54,16 +54,25 @@ export function saveMetadataCache(cache) {
     writeFileSync(tmpPath, JSON.stringify(merged), "utf-8");
     renameSync(tmpPath, cachePath);
 }
-export function computeServerHash(definition, environment = process.env) {
+function normalizeHashEnvironment(value) {
+    if (typeof value === "string")
+        return { environment: process.env, defaultCwd: value };
+    return { environment: value ?? process.env };
+}
+export function computeServerHash(definition, environmentOrCwd = process.env) {
     // Hash only fields that affect server identity and tool/resource output.
     // Exclude lifecycle, idleTimeout, requestTimeoutMs, debug — those are runtime behavior settings
     // that don't change which tools a server exposes.
+    const { environment, defaultCwd } = normalizeHashEnvironment(environmentOrCwd);
+    const resolvedCwd = isBuiltInAgentPlugin(definition, "cwd")
+        ? definition.cwd
+        : resolveConfigPath(definition.cwd, environment) ?? (definition.command ? defaultCwd : undefined);
     const identity = {
         command: definition.command,
         args: definition.args,
         socket: resolveConfigPath(definition.socket, environment),
         env: isBuiltInAgentPlugin(definition, "env") ? definition.env : interpolateEnvRecord(definition.env, environment),
-        cwd: isBuiltInAgentPlugin(definition, "cwd") ? definition.cwd : resolveConfigPath(definition.cwd, environment),
+        cwd: resolvedCwd,
         url: resolveServerUrl(definition, environment),
         headers: isBuiltInAgentPlugin(definition, "headers") ? definition.headers : interpolateEnvRecord(definition.headers, environment),
         requestHeadersCommand: definition.requestHeadersCommand
@@ -85,10 +94,10 @@ export function computeServerHash(definition, environment = process.env) {
     const normalized = stableStringify(identity);
     return createHash("sha256").update(normalized).digest("hex");
 }
-export function isServerCacheValid(entry, definition, maxAgeMs = CACHE_MAX_AGE_MS, environment = process.env) {
+export function isServerCacheValid(entry, definition, maxAgeMs = CACHE_MAX_AGE_MS, environmentOrCwd = process.env) {
     let configHash;
     try {
-        configHash = computeServerHash(definition, environment);
+        configHash = computeServerHash(definition, environmentOrCwd);
     }
     catch {
         return false;
@@ -131,7 +140,7 @@ export function parseDirectToolSelectors(selectors) {
     }
     return { servers, tools };
 }
-export function getMissingConfiguredDirectToolServers(config, cache, envOverride) {
+export function getMissingConfiguredDirectToolServers(config, cache, envOverride, defaultCwd) {
     const missing = [];
     const globalDirect = config.settings?.directTools;
     const envSelection = envOverride ? parseDirectToolSelectors(envOverride) : null;
@@ -146,20 +155,20 @@ export function getMissingConfiguredDirectToolServers(config, cache, envOverride
         if (!hasDirectTools)
             continue;
         const serverCache = cache?.servers?.[serverName];
-        if (!serverCache || !isServerCacheValid(serverCache, definition)) {
+        if (!serverCache || !isServerCacheValid(serverCache, definition, undefined, defaultCwd)) {
             missing.push(serverName);
         }
     }
     return missing;
 }
-export function reconstructToolMetadata(serverName, entry, prefix, definition, configuredServers, cache, sharedSelectorCandidateIndex) {
+export function reconstructToolMetadata(serverName, entry, prefix, definition, configuredServers, cache, sharedSelectorCandidateIndex, defaultCwd) {
     const metadata = [];
     const effectivePrefix = resolveToolPrefix(definition, prefix);
     const hasToolFilters = (Array.isArray(definition.includeTools) && definition.includeTools.length > 0) ||
         (Array.isArray(definition.excludeTools) && definition.excludeTools.length > 0);
     const selectorCandidateIndex = hasToolFilters
         ? sharedSelectorCandidateIndex ?? (configuredServers && cache
-            ? createCachedToolSelectorCandidateIndex(configuredServers, cache, prefix)
+            ? createCachedToolSelectorCandidateIndex(configuredServers, cache, prefix, defaultCwd)
             : undefined)
         : undefined;
     for (const tool of entry.tools ?? []) {
@@ -202,11 +211,11 @@ export function reconstructToolMetadata(serverName, entry, prefix, definition, c
     }
     return resolveUniqueNameOwnership(metadata, (tool) => tool.name).unique;
 }
-export function createCachedToolSelectorCandidateIndex(configuredServers, cache, prefix) {
+export function createCachedToolSelectorCandidateIndex(configuredServers, cache, prefix, defaultCwd) {
     const candidates = new Set();
     for (const [serverName, definition] of Object.entries(configuredServers)) {
         const entry = cache.servers[serverName];
-        if (!entry || !isServerCacheValid(entry, definition) || isServerDisabled(definition))
+        if (!entry || !isServerCacheValid(entry, definition, undefined, defaultCwd) || isServerDisabled(definition))
             continue;
         const effectivePrefix = resolveToolPrefix(definition, prefix);
         for (const tool of entry.tools ?? []) {

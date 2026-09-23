@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createDirectToolExecutor, getMissingConfiguredDirectToolServers, resolveDirectTools } from "../direct-tools.ts";
@@ -54,7 +54,27 @@ function disabledState() {
   } as any;
 }
 
-afterEach(() => vi.restoreAllMocks());
+const originalHome = process.env.HOME;
+const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+let isolatedHome: string;
+
+beforeEach(() => {
+  // Keep the default agent path under a disposable HOME even when the suite
+  // is invoked with PI_CODING_AGENT_DIR unset.
+  isolatedHome = mkdtempSync(join(tmpdir(), "pi-mcp-disabled-home-"));
+  mkdirSync(join(isolatedHome, ".pi", "agent"), { recursive: true });
+  process.env.HOME = isolatedHome;
+  delete process.env.PI_CODING_AGENT_DIR;
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  if (originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = originalHome;
+  if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+  rmSync(isolatedHome, { recursive: true, force: true });
+});
 
 describe("disabled MCP servers", () => {
   it("only literal true disables direct tools and configured bootstrap", () => {
@@ -229,12 +249,12 @@ describe("disabled MCP servers", () => {
     expect(connect).toHaveBeenCalledWith("enabled", expect.objectContaining({ lifecycle: "eager" }), expect.any(AbortSignal));
   });
 
-  it("keeps no-theme status usable and reports disabled count", () => {
+  it("keeps no-theme status usable while excluding disabled servers", () => {
     const setStatus = vi.fn();
     updateStatusBar({
       ...disabledState(),
       ui: { setStatus, theme: undefined },
     });
-    expect(setStatus).toHaveBeenCalledWith("mcp", "🔌 MCP: 1 server enabled (1 disabled)");
+    expect(setStatus).toHaveBeenCalledWith("mcp", "MCP: 0/1 servers");
   });
 });

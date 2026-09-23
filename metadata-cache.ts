@@ -182,6 +182,7 @@ export function getMissingConfiguredDirectToolServers(
   config: McpConfig,
   cache: MetadataCache | null,
   envOverride?: string[],
+  defaultCwd?: string,
 ): string[] {
   const missing: string[] = [];
   const globalDirect = config.settings?.directTools;
@@ -198,7 +199,7 @@ export function getMissingConfiguredDirectToolServers(
     if (!hasDirectTools) continue;
 
     const serverCache = cache?.servers?.[serverName];
-    if (!serverCache || !isServerCacheValid(serverCache, definition)) {
+    if (!serverCache || !isServerCacheValid(serverCache, definition, undefined, defaultCwd)) {
       missing.push(serverName);
     }
   }
@@ -214,6 +215,7 @@ export function reconstructToolMetadata(
   configuredServers?: Record<string, ServerEntry>,
   cache?: MetadataCache,
   sharedSelectorCandidateIndex?: ToolSelectorCandidateIndex,
+  defaultCwd?: string,
 ): ToolMetadata[] {
   const metadata: ToolMetadata[] = [];
   const effectivePrefix = resolveToolPrefix(definition, prefix);
@@ -222,7 +224,7 @@ export function reconstructToolMetadata(
     (Array.isArray(definition.excludeTools) && definition.excludeTools.length > 0);
   const selectorCandidateIndex = hasToolFilters
     ? sharedSelectorCandidateIndex ?? (configuredServers && cache
-      ? createCachedToolSelectorCandidateIndex(configuredServers, cache, prefix)
+      ? createCachedToolSelectorCandidateIndex(configuredServers, cache, prefix, defaultCwd)
       : undefined)
     : undefined;
 
@@ -273,11 +275,12 @@ export function createCachedToolSelectorCandidateIndex(
   configuredServers: Record<string, ServerEntry>,
   cache: MetadataCache,
   prefix: ToolPrefix,
+  defaultCwd?: string,
 ): ToolSelectorCandidateIndex {
   const candidates = new Set<string>();
   for (const [serverName, definition] of Object.entries(configuredServers)) {
     const entry = cache.servers[serverName];
-    if (!entry || !isServerCacheValid(entry, definition) || isServerDisabled(definition)) continue;
+    if (!entry || !isServerCacheValid(entry, definition, undefined, defaultCwd) || isServerDisabled(definition)) continue;
     const effectivePrefix = resolveToolPrefix(definition, prefix);
     for (const tool of entry.tools ?? []) {
       if (!isUiToolVisibleToModel(tool.uiVisibility)) continue;

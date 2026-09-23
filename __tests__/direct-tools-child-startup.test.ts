@@ -43,7 +43,9 @@ describe("direct tools in child Pi processes", () => {
           MCP_CHILD_ADAPTER_PATH: resolve("index.ts"),
           MCP_CHILD_PROBE_PATH: resolve("__tests__/fixtures/direct-tools-agent-start-probe.ts"),
           MCP_CHILD_INVOKE_TOOL: "demo_reload_identity",
-          MCP_CHILD_INPUT: selection === "config" ? "Call the demo tool." : undefined,
+          // session_start remains non-blocking; the input gate is the
+          // pre-turn synchronization point for both selector sources.
+          MCP_CHILD_INPUT: "Call the demo tool.",
           MCP_DIRECT_TOOLS: selection === "env" ? "demo/reload_identity" : undefined,
         },
         timeout: 15_000,

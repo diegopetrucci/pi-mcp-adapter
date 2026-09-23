@@ -4,7 +4,7 @@ import type {
   PromptMessage,
 } from "@modelcontextprotocol/client";
 import type { McpExtensionState } from "./state.ts";
-import { isServerDisabled, type McpConfig, type PromptMetadata } from "./types.ts";
+import { isServerDisabled, type McpConfig, type MetadataCache, type PromptMetadata } from "./types.ts";
 import { formatPromptCommandName } from "./types.ts";
 import { isServerCacheValid, loadMetadataCache, reconstructPromptMetadata } from "./metadata-cache.ts";
 import { logger } from "./logger.ts";
@@ -15,8 +15,11 @@ import { truncateAtWord } from "./utils.ts";
  * time. Mirrors `resolveDirectTools`: reads the persistent metadata cache so
  * commands are available before any server connects.
  */
-export function resolveCachedPrompts(config: McpConfig): PromptMetadata[] {
-  const cache = loadMetadataCache();
+export function resolveCachedPrompts(
+  config: McpConfig,
+  defaultCwd?: string,
+  cache: MetadataCache | null = loadMetadataCache(),
+): PromptMetadata[] {
   if (!cache?.servers) return [];
 
   const prefix = config.settings?.toolPrefix ?? "server";
@@ -25,7 +28,7 @@ export function resolveCachedPrompts(config: McpConfig): PromptMetadata[] {
   for (const [serverName, entry] of Object.entries(cache.servers)) {
     const definition = config.mcpServers[serverName];
     if (!definition || isServerDisabled(definition)) continue;
-    if (!entry?.prompts?.length || !isServerCacheValid(entry, definition)) continue;
+    if (!entry?.prompts?.length || !isServerCacheValid(entry, definition, undefined, defaultCwd)) continue;
     specs.push(...reconstructPromptMetadata(serverName, entry.prompts, prefix, definition));
   }
 
@@ -120,6 +123,15 @@ function stripQuotes(value: string): string {
     return value.slice(1, -1);
   }
   return value;
+}
+
+export const MCP_INITIALIZATION_PENDING_MESSAGE = "MCP initialization is still in progress. Try again shortly.";
+
+export class McpInitializationPendingError extends Error {
+  constructor() {
+    super(MCP_INITIALIZATION_PENDING_MESSAGE);
+    this.name = "McpInitializationPendingError";
+  }
 }
 
 export interface ResolvedPromptArgs {
@@ -255,6 +267,10 @@ export function createPromptCommand(
         try {
           state = await runtime.ensureState(ctx);
         } catch (error) {
+          if (error instanceof McpInitializationPendingError) {
+            if (ctx.hasUI) ctx.ui.notify(MCP_INITIALIZATION_PENDING_MESSAGE, "info");
+            return;
+          }
           const message = error instanceof Error ? error.message : String(error);
           if (ctx.hasUI) ctx.ui.notify(`MCP initialization failed: ${message}`, "error");
           return;

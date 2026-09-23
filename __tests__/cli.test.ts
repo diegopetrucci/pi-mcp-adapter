@@ -222,16 +222,6 @@ describe("cli init helper", () => {
     expect(result.stdout).toContain("No Pi config changes needed.");
   });
 
-  it("explains that install now goes through `pi install`", async () => {
-    const logs: string[] = [];
-    const errors: string[] = [];
-    const { main } = await import("../cli.js");
-    const exitCode = await main(["install"], (line) => logs.push(line), (line) => errors.push(line));
-
-    expect(exitCode).toBe(1);
-    expect(errors.join("\n")).toContain("Use `pi install npm:pi-mcp-adapter` instead");
-    expect(logs).toEqual([]);
-  });
 });
 
 describe("cli token helper", () => {
@@ -338,43 +328,5 @@ describe("cli token helper", () => {
     const missingLogs: string[] = [];
     expect(await main(["token", "status", "remote"], (line) => missingLogs.push(line), () => {}, tokenStdin(""))).toBe(1);
     expect(missingLogs.join("\n")).toContain('No bearer token is stored for "remote".');
-  });
-});
-
-describe("cli TypeSafe key helper", () => {
-  beforeEach(() => {
-    vi.resetModules();
-    process.env.PI_MCP_ADAPTER_TEST_AUTH_STORE = "memory";
-    delete process.env.TYPESAFE_API_KEY;
-  });
-
-  function keyStdin(text: string): NodeJS.ReadStream {
-    return Readable.from([text]) as unknown as NodeJS.ReadStream;
-  }
-
-  it("sets, reports, and removes a key without revealing it", async () => {
-    const { main } = await import("../cli.js");
-    const { resetTestSecureKeyring } = await import("../dist/secure-keyring.js");
-    resetTestSecureKeyring();
-    const logs: string[] = [];
-    expect(await main(["key", "set", "typesafe"], line => logs.push(line), () => {}, keyStdin("cli-secret\n"))).toBe(0);
-    expect(logs.join("\n")).not.toContain("cli-secret");
-    const status: string[] = [];
-    expect(await main(["key", "status", "typesafe"], line => status.push(line), () => {}, keyStdin(""))).toBe(0);
-    expect(status).toEqual(["source=keyring"]);
-    expect(await main(["key", "remove", "typesafe"], () => {}, () => {}, keyStdin(""))).toBe(0);
-  });
-
-  it("rejects argv secrets and explains an environment override after removal", async () => {
-    const { main } = await import("../cli.js");
-    const errors: string[] = [];
-    expect(await main(["key", "set", "typesafe", "argv-secret"], () => {}, line => errors.push(line), keyStdin(""))).toBe(1);
-    expect(errors.join("\n")).not.toContain("argv-secret");
-    expect(errors.join("\n")).toContain("must not be passed");
-    process.env.TYPESAFE_API_KEY = "environment-secret";
-    const logs: string[] = [];
-    expect(await main(["key", "remove", "typesafe"], line => logs.push(line), () => {}, keyStdin(""))).toBe(0);
-    expect(logs.join("\n")).toContain("still present and overrides");
-    expect(logs.join("\n")).not.toContain("environment-secret");
   });
 });

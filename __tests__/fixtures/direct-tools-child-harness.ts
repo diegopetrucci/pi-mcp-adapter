@@ -35,8 +35,9 @@ await session.bindExtensions({ mode: "print", onError: error => console.error(er
 
 try {
   await session.reload();
-  // Normal prompts emit input before agent_start, allowing config-selected
-  // tools to finish loading. The env-only case still checks session startup.
+  // Normal prompts emit input before agent_start. The adapter keeps
+  // session_start non-blocking and uses this pre-turn gate for both
+  // config- and env-selected cold-cache tools.
   if (process.env.MCP_CHILD_INPUT) {
     await session.extensionRunner.emitInput(process.env.MCP_CHILD_INPUT, undefined, "interactive");
   }

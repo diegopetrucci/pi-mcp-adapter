@@ -126,6 +126,39 @@ describe("mcp-panel include/exclude tools", () => {
     panel.dispose();
   });
 
+  it("uses the session cwd for init-written implicit-cwd cache and collision context", () => {
+    const sessionCwd = "/repo/session";
+    const config: McpConfig = {
+      settings: { toolPrefix: "server" },
+      mcpServers: {
+        "my-server": { command: "current", excludeTools: ["my_server_do_thing"] },
+        my_server: { command: "other" },
+      },
+    };
+    const cache: MetadataCache = {
+      version: 1,
+      servers: Object.fromEntries(Object.entries(config.mcpServers).map(([name, definition]) => [name, {
+        configHash: computeServerHash(definition, sessionCwd),
+        cachedAt: Date.now(),
+        tools: [{ name: "do_thing", description: name }],
+        resources: [],
+      }])),
+    };
+    const panel = createMcpPanel(
+      config, cache, new Map(),
+      { reconnect: async () => true, canAuthenticate: () => false, authenticate: async () => ({ ok: false }), getConnectionStatus: () => "idle", refreshCacheAfterReconnect: () => null },
+      { requestRender: () => {} }, () => {},
+      { cwd: sessionCwd },
+    );
+
+    panel.handleInput("d");
+    panel.handleInput("o");
+    const output = stripAnsi(panel.render(120).join("\n"));
+    expect(output).not.toContain("(not cached)");
+    expect((output.match(/do_thing/g) ?? []).length).toBe(2);
+    panel.dispose();
+  });
+
   it("ignores invalid cache entries for panel display and collision context", () => {
     const config: McpConfig = {
       settings: { toolPrefix: "server" },

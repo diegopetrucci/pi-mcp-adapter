@@ -72,13 +72,11 @@ beforeEach(() => {
 });
 
 describe("cross-server collision scan is skipped without tool filters", () => {
-  it("buildProxyDescription tells the model search-mode tools activate on search", () => {
+  it("buildProxyDescription stays fixed across configured servers", () => {
     const withSearch = buildProxyDescription({ settings: {}, mcpServers: { demo: { command: "demo", directTools: "search" }, other: { command: "o" } } });
-    expect(withSearch).toContain("Search-mode servers (demo)");
-    expect(withSearch).toContain("mcp({ search }) matches them");
-    expect(withSearch).not.toContain("mcp({ tool }) calls them");
     const without = buildProxyDescription({ settings: {}, mcpServers: { other: { command: "o" } } });
-    expect(without).not.toContain("Search-mode servers");
+    expect(withSearch).toBe(without);
+    expect(withSearch).not.toMatch(/demo|other|Search-mode/);
   });
 
   it("buildProxyDescription never generates candidates — it is config-pure", () => {

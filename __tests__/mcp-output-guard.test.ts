@@ -411,7 +411,10 @@ describe("guardMcpOutput", () => {
     const text = Array.from({ length: 30 }, (_, i) => `entry-${i}`).join("\n");
     const guarded = await guardMcpOutput([{ type: "text", text }], { maxBytes: 10_000, maxLines: 10 });
 
-    const returnedText = guarded.content[0].type === "text" ? guarded.content[0].text : "";
+    const returnedText = guarded.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join("\n");
     const noticeStart = returnedText.indexOf("\n\n[MCP text output truncated:");
     expect(noticeStart).toBeGreaterThan(0);
     const deliveredPreview = returnedText.slice(0, noticeStart);

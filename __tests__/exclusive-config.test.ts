@@ -20,7 +20,7 @@ afterEach(async () => {
 
 describe("exclusive MCP config", () => {
   it.each(["exclusive", "merge"])("reloads queued URL writes at the active project path in %s mode", async (mode) => {
-    const root = await mkdtemp(join(tmpdir(), "pi-mcp-install-reload-"));
+    const root = await mkdtemp(join(tmpdir(), "pi-mcp-config-reload-"));
     roots.push(root);
     const destination = join(root, ".mcp.json");
     vi.stubEnv("PI_CODING_AGENT_DIR", join(root, "agent"));
@@ -73,12 +73,18 @@ describe("exclusive MCP config", () => {
     expect(discovery.hostConfigDiscovery).toBe("off");
 
     const overrideConfig = loadMcpConfig(override, workspace);
-    expect(overrideConfig.mcpServers).toEqual({ chosen: { command: "node", args: ["chosen"] } });
+    expect(overrideConfig.mcpServers).toEqual({
+      chosen: { command: "node", args: ["chosen"] },
+      explicit_vscode: { command: "node", args: ["explicit-vscode"] },
+    });
     const overrideDiscovery = getMcpDiscoverySummary(override, workspace);
     expect(overrideDiscovery.sources).toEqual([
-      expect.objectContaining({ id: "pi-global", path: override, exists: true, serverCount: 1 }),
+      expect.objectContaining({ id: "explicit-read-only", kind: "explicit", path: override, exists: true, serverCount: 1 }),
+      expect.objectContaining({ id: "pi-adapter-overlay", kind: "pi", exists: true, serverCount: 0 }),
     ]);
-    expect(overrideDiscovery.imports).toEqual([]);
+    expect(overrideDiscovery.imports).toEqual([
+      expect.objectContaining({ kind: "vscode", serverCount: 1 }),
+    ]);
   });
 });
 

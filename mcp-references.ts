@@ -97,29 +97,30 @@ function hasNamespaceProxy(
   collidingNamespaceNames: ReadonlySet<string>,
   existingDirectNames: ReadonlySet<string>,
   serverName: string,
+  defaultCwd?: string,
 ): boolean {
-  if (config.settings?.namespaceProxyTools === false) return false;
+  if (config.settings?.namespaceProxyTools !== true) return false;
   const definition = config.mcpServers[serverName];
   if (!definition || isServerDisabled(definition)) return false;
   if (isMcpServerDirectlyRegistered(definition, config.settings, serverName, envOverride)) return false;
   const toolName = namespaceProxyName(serverName);
   if (collidingNamespaceNames.has(toolName) || existingDirectNames.has(toolName)) return false;
-  const entry = resolveValidCache(definition, cache, serverName);
+  const entry = resolveValidCache(definition, cache, serverName, defaultCwd);
   return !!entry && hasCallableCachedTargets(entry, definition);
 }
 
-function resolveValidCache(definition: ServerEntry | undefined, cache: MetadataCache | null, serverName: string): ServerCacheEntry | undefined {
+function resolveValidCache(definition: ServerEntry | undefined, cache: MetadataCache | null, serverName: string, defaultCwd?: string): ServerCacheEntry | undefined {
   const entry = cache?.servers[serverName];
-  if (!definition || !entry || !isServerCacheValid(entry, definition)) return undefined;
+  if (!definition || !entry || !isServerCacheValid(entry, definition, undefined, defaultCwd)) return undefined;
   return entry;
 }
 
-function cachedServers(config: McpConfig, cache: MetadataCache | null): CachedServer[] {
+function cachedServers(config: McpConfig, cache: MetadataCache | null, defaultCwd?: string): CachedServer[] {
   const servers: CachedServer[] = [];
   if (!cache) return servers;
   for (const [serverName, definition] of Object.entries(config.mcpServers)) {
     if (isServerDisabled(definition)) continue;
-    const entry = resolveValidCache(definition, cache, serverName);
+    const entry = resolveValidCache(definition, cache, serverName, defaultCwd);
     if (!entry) continue;
     servers.push({ serverName, definition, entry, prefix: resolveToolPrefix(definition, config.settings?.toolPrefix) });
   }
@@ -131,11 +132,12 @@ function namespaceCollisionNames(
   cache: MetadataCache | null,
   envOverride: DirectToolSelectorOverride | null,
   existingDirectNames: ReadonlySet<string>,
+  defaultCwd?: string,
 ): Set<string> {
   const names = new Map<string, number>();
   if (!cache) return new Set();
   for (const serverName of Object.keys(config.mcpServers)) {
-    if (!hasNamespaceProxy(config, cache, envOverride, new Set(), existingDirectNames, serverName)) continue;
+    if (!hasNamespaceProxy(config, cache, envOverride, new Set(), existingDirectNames, serverName, defaultCwd)) continue;
     const toolName = namespaceProxyName(serverName);
     names.set(toolName, (names.get(toolName) ?? 0) + 1);
   }
@@ -147,9 +149,10 @@ function registeredDirectNames(
   cache: MetadataCache | null,
   envOverride: DirectToolSelectorOverride | null,
   selectorIndex: ToolSelectorCandidateIndex | undefined,
+  defaultCwd?: string,
 ): Map<string, DirectNameOwner> {
   const entries: Array<{ name: string; owner: DirectNameOwner }> = [];
-  for (const { serverName, definition, entry, prefix } of cachedServers(config, cache)) {
+  for (const { serverName, definition, entry, prefix } of cachedServers(config, cache, defaultCwd)) {
     const selection = resolveDirectSelection(config, definition, serverName, envOverride);
     for (const { name, originalName } of directNameEntries(entry, serverName, definition, prefix, selection, selectorIndex)) {
       entries.push({ name, owner: { serverName, originalName } });
@@ -158,9 +161,9 @@ function registeredDirectNames(
   return new Map(resolveUniqueNameOwnership(entries, (entry) => entry.name).unique.map(({ name, owner }) => [name, owner]));
 }
 
-function allCurrentCandidates(config: McpConfig, cache: MetadataCache | null): ToolSelectorCandidateIndex | undefined {
+function allCurrentCandidates(config: McpConfig, cache: MetadataCache | null, defaultCwd?: string): ToolSelectorCandidateIndex | undefined {
   if (!cache) return undefined;
-  return createCachedToolSelectorCandidateIndex(config.mcpServers, cache, config.settings?.toolPrefix ?? "server");
+  return createCachedToolSelectorCandidateIndex(config.mcpServers, cache, config.settings?.toolPrefix ?? "server", defaultCwd);
 }
 
 function directToolName(
@@ -255,6 +258,7 @@ function resolveKnownServerReference(
   names: string[],
   seen: Set<string>,
   diagnostics: string[],
+  defaultCwd?: string,
 ): void {
   const serverName = parsed.server!;
   const definition = config.mcpServers[serverName];
@@ -262,7 +266,7 @@ function resolveKnownServerReference(
     diagnostics.push(`MCP reference "${parsed.raw}" refers to disabled or unknown server "${serverName}"`);
     return;
   }
-  const entry = resolveValidCache(definition, cache, serverName);
+  const entry = resolveValidCache(definition, cache, serverName, defaultCwd);
   if (!entry) {
     diagnostics.push(`MCP reference "${parsed.raw}" cannot be resolved: no valid cached metadata for server "${serverName}"`);
     return;
@@ -280,7 +284,7 @@ function resolveKnownServerReference(
     return;
   }
 
-  if (hasNamespaceProxy(config, cache, envOverride, collidingNamespaceNames, existingDirectNames, serverName)) {
+  if (hasNamespaceProxy(config, cache, envOverride, collidingNamespaceNames, existingDirectNames, serverName, defaultCwd)) {
     if (hasAllowedProxyTool(entry, serverName, definition, prefix, selectorIndex, parsed.tool)) {
       addName(names, seen, namespaceProxyName(serverName));
       return;
@@ -305,9 +309,10 @@ function resolveBareToolReference(
   names: string[],
   seen: Set<string>,
   diagnostics: string[],
+  defaultCwd?: string,
 ): void {
   let matched = false;
-  for (const { serverName, definition, entry, prefix } of cachedServers(config, cache)) {
+  for (const { serverName, definition, entry, prefix } of cachedServers(config, cache, defaultCwd)) {
     const selection = resolveDirectSelection(config, definition, serverName, envOverride);
     const directNames = ownedDirectToolNames(
       directNameEntries(entry, serverName, definition, prefix, selection, selectorIndex, toolName),
@@ -318,7 +323,7 @@ function resolveBareToolReference(
       addName(names, seen, name);
       matched = true;
     }
-    if (hasNamespaceProxy(config, cache, envOverride, collidingNamespaceNames, existingDirectNames, serverName) &&
+    if (hasNamespaceProxy(config, cache, envOverride, collidingNamespaceNames, existingDirectNames, serverName, defaultCwd) &&
         hasAllowedProxyTool(entry, serverName, definition, prefix, selectorIndex, toolName)) {
       addName(names, seen, namespaceProxyName(serverName));
       matched = true;
@@ -332,6 +337,7 @@ export function resolveMcpToolReferences(
   config: McpConfig | null,
   cache: MetadataCache | null,
   envOverride?: string[],
+  defaultCwd?: string,
 ): McpReferenceResolution {
   const names: string[] = [];
   const diagnostics: string[] = [];
@@ -345,10 +351,10 @@ export function resolveMcpToolReferences(
   }
 
   const parsedOverride = envOverride ? parseDirectToolSelectors(envOverride) : null;
-  const selectorIndex = allCurrentCandidates(config, cache);
-  const directNameOwners = registeredDirectNames(config, cache, parsedOverride, selectorIndex);
+  const selectorIndex = allCurrentCandidates(config, cache, defaultCwd);
+  const directNameOwners = registeredDirectNames(config, cache, parsedOverride, selectorIndex, defaultCwd);
   const directNames = new Set(directNameOwners.keys());
-  const collidingNamespaceNames = namespaceCollisionNames(config, cache, parsedOverride, directNames);
+  const collidingNamespaceNames = namespaceCollisionNames(config, cache, parsedOverride, directNames, defaultCwd);
 
   for (const ref of refs) {
     if (!ref.startsWith("mcp:")) {
@@ -361,9 +367,9 @@ export function resolveMcpToolReferences(
       continue;
     }
     if (config.mcpServers[parsed.server]) {
-      resolveKnownServerReference(parsed, config, cache, parsedOverride, collidingNamespaceNames, directNames, directNameOwners, selectorIndex, names, seen, diagnostics);
+      resolveKnownServerReference(parsed, config, cache, parsedOverride, collidingNamespaceNames, directNames, directNameOwners, selectorIndex, names, seen, diagnostics, defaultCwd);
     } else if (parsed.tool === undefined) {
-      resolveBareToolReference(ref, parsed.server, config, cache, parsedOverride, collidingNamespaceNames, directNames, directNameOwners, selectorIndex, names, seen, diagnostics);
+      resolveBareToolReference(ref, parsed.server, config, cache, parsedOverride, collidingNamespaceNames, directNames, directNameOwners, selectorIndex, names, seen, diagnostics, defaultCwd);
     } else {
       diagnostics.push(`MCP reference "${ref}" refers to unknown server "${parsed.server}"`);
     }

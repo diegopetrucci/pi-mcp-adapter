@@ -70,7 +70,8 @@ describe("syncNamespaceProxyTools", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([undefined, true])("registers namespace proxies when namespaceProxyTools is %s", async (namespaceProxyTools) => {
+  it("registers namespace proxies when namespaceProxyTools is explicitly true", async () => {
+    const namespaceProxyTools = true;
     const { syncNamespaceProxyTools } = await importSync();
     const { pi, registered } = makePi();
 
@@ -91,12 +92,12 @@ describe("syncNamespaceProxyTools", () => {
     expect(tool.execute).toBeTypeOf("function");
   });
 
-  it("does not register namespace proxies when namespaceProxyTools is false", async () => {
+  it("does not register namespace proxies by default", async () => {
     const { syncNamespaceProxyTools } = await importSync();
     const { pi } = makePi();
 
     const result = syncNamespaceProxyTools({
-      config: { mcpServers: { demo: { command: "demo" } }, settings: { namespaceProxyTools: false } },
+      config: { mcpServers: { demo: { command: "demo" } } },
       cache: CACHE_SHAPE([["demo", { tools: [{ name: "search" }] }]]),
       envOverride: null,
       existingDirectNames: new Set(),
@@ -111,10 +112,10 @@ describe("syncNamespaceProxyTools", () => {
     expect(result).toEqual({ specs: [], added: [], updated: [], deactivated: [] });
   });
 
-  it.each([true, false])("deactivates disabled namespace proxies with unregisterTool=%s", async (canUnregister) => {
+  it.each([true, false])("deactivates disabled namespace proxies without unregisterTool=%s", async (hasUnregister) => {
     const { syncNamespaceProxyTools } = await importSync();
     const { pi, registered } = makePi();
-    if (!canUnregister) delete pi.unregisterTool;
+    if (!hasUnregister) delete pi.unregisterTool;
     let activeTools = ["mcp", "mcpScript", "demo_search", "mcp__demo"];
     pi.getActiveTools = vi.fn(() => activeTools);
     pi.setActiveTools = vi.fn((names: string[]) => { activeTools = names; });
@@ -136,7 +137,8 @@ describe("syncNamespaceProxyTools", () => {
     expect(pi.registerTool).not.toHaveBeenCalled();
     expect(result.deactivated).toEqual(["mcp__demo"]);
     expect(activeTools).toEqual(["mcp", "mcpScript", "demo_search"]);
-    if (canUnregister) expect(registered.has("mcp__demo")).toBe(false);
+    expect(registered.has("mcp__demo")).toBe(true);
+    if (hasUnregister) expect(pi.unregisterTool).not.toHaveBeenCalled();
   });
 
   it("registers proxy-only servers that expose only resources", async () => {
@@ -144,7 +146,7 @@ describe("syncNamespaceProxyTools", () => {
     const { pi, registered } = makePi();
 
     syncNamespaceProxyTools({
-      config: { mcpServers: { docs: { command: "docs" } } },
+      config: { settings: { namespaceProxyTools: true }, mcpServers: { docs: { command: "docs" } } },
       cache: CACHE_SHAPE([["docs", { tools: [], resources: [{ name: "guide", uri: "file://guide" }] }]]),
       envOverride: null,
       existingDirectNames: new Set(),
@@ -163,7 +165,7 @@ describe("syncNamespaceProxyTools", () => {
     const { pi, registered } = makePi();
 
     syncNamespaceProxyTools({
-      config: { mcpServers: { context7: { url: "https://mcp.context7.com/mcp", directTools: true } } },
+      config: { settings: { namespaceProxyTools: true }, mcpServers: { context7: { url: "https://mcp.context7.com/mcp", directTools: true } } },
       cache: CACHE_SHAPE([["context7", { tools: [{ name: "query_docs" }], definition: { url: "https://mcp.context7.com/mcp", directTools: true } }]]),
       envOverride: null,
       existingDirectNames: new Set(["context7_query_docs"]),
@@ -182,7 +184,7 @@ describe("syncNamespaceProxyTools", () => {
     const { pi, registered } = makePi();
 
     syncNamespaceProxyTools({
-      config: { mcpServers: { "context-mode": { command: "context-mode", disabled: true } } },
+      config: { settings: { namespaceProxyTools: true }, mcpServers: { "context-mode": { command: "context-mode", disabled: true } } },
       cache: CACHE_SHAPE([["context-mode", { tools: [{ name: "ctx_execute" }] }]]),
       envOverride: null,
       existingDirectNames: new Set(),
@@ -201,7 +203,7 @@ describe("syncNamespaceProxyTools", () => {
     const { pi, registered } = makePi();
 
     syncNamespaceProxyTools({
-      config: { mcpServers: { "context-mode": { command: "context-mode" } } },
+      config: { settings: { namespaceProxyTools: true }, mcpServers: { "context-mode": { command: "context-mode" } } },
       cache: { version: 1, servers: {} },
       envOverride: null,
       existingDirectNames: new Set(),
@@ -220,7 +222,7 @@ describe("syncNamespaceProxyTools", () => {
     const { pi, registered } = makePi();
 
     syncNamespaceProxyTools({
-      config: { mcpServers: { "context-mode": { command: "context-mode" } } },
+      config: { settings: { namespaceProxyTools: true }, mcpServers: { "context-mode": { command: "context-mode" } } },
       cache: CACHE_SHAPE([["context-mode", { tools: [{ name: "ctx_execute" }], configHash: "stale" }]]),
       envOverride: null,
       existingDirectNames: new Set(),
@@ -239,7 +241,7 @@ describe("syncNamespaceProxyTools", () => {
     const { pi, registered } = makePi();
 
     syncNamespaceProxyTools({
-      config: { mcpServers: { "context-mode": { command: "context-mode" } } },
+      config: { settings: { namespaceProxyTools: true }, mcpServers: { "context-mode": { command: "context-mode" } } },
       cache: CACHE_SHAPE([["context-mode", { tools: [{ name: "ctx_execute" }] }]]),
       envOverride: { servers: new Set(["context-mode"]), tools: new Map() },
       existingDirectNames: new Set(),
@@ -258,7 +260,7 @@ describe("syncNamespaceProxyTools", () => {
     const { pi, registered } = makePi();
 
     syncNamespaceProxyTools({
-      config: { mcpServers: { "context-mode": { command: "context-mode", directTools: true } } },
+      config: { settings: { namespaceProxyTools: true }, mcpServers: { "context-mode": { command: "context-mode", directTools: true } } },
       cache: CACHE_SHAPE([["context-mode", { tools: [{ name: "ctx_execute" }] }]]),
       envOverride: { servers: new Set(), tools: new Map([["context-mode", new Set(["missing_tool"]) ]]) },
       existingDirectNames: new Set(),
@@ -277,7 +279,7 @@ describe("syncNamespaceProxyTools", () => {
     const { pi, registered } = makePi();
 
     syncNamespaceProxyTools({
-      config: { mcpServers: { context7: { command: "context7", directTools: true } } },
+      config: { settings: { namespaceProxyTools: true }, mcpServers: { context7: { command: "context7", directTools: true } } },
       cache: CACHE_SHAPE([["context7", { tools: [{ name: "query_docs" }] }]]),
       envOverride: { servers: new Set(), tools: new Map() },
       existingDirectNames: new Set(),
@@ -296,7 +298,7 @@ describe("syncNamespaceProxyTools", () => {
     const { pi, registered } = makePi();
 
     syncNamespaceProxyTools({
-      config: { mcpServers: { context7: { command: "context7", directTools: true }, other: { command: "other" } } },
+      config: { settings: { namespaceProxyTools: true }, mcpServers: { context7: { command: "context7", directTools: true }, other: { command: "other" } } },
       cache: CACHE_SHAPE([
         ["context7", { tools: [{ name: "query_docs" }] }],
         ["other", { tools: [{ name: "search" }] }],
@@ -319,7 +321,7 @@ describe("syncNamespaceProxyTools", () => {
     const { pi, registered } = makePi();
 
     syncNamespaceProxyTools({
-      config: { mcpServers: { "context-mode": { command: "context-mode" } } },
+      config: { settings: { namespaceProxyTools: true }, mcpServers: { "context-mode": { command: "context-mode" } } },
       cache: CACHE_SHAPE([["context-mode", { tools: [{ name: "ctx_execute" }] }]]),
       envOverride: null,
       existingDirectNames: new Set(),
@@ -350,7 +352,7 @@ describe("syncNamespaceProxyTools", () => {
     const { pi, registered } = makePi();
 
     syncNamespaceProxyTools({
-      config: { mcpServers: { "context-mode": { command: "context-mode" } } },
+      config: { settings: { namespaceProxyTools: true }, mcpServers: { "context-mode": { command: "context-mode" } } },
       cache: CACHE_SHAPE([["context-mode", { tools: [{ name: "ctx_execute" }] }]]),
       envOverride: null,
       existingDirectNames: new Set(["mcp__context_mode"]),
@@ -369,7 +371,7 @@ describe("syncNamespaceProxyTools", () => {
     const { pi, registered, unregistered } = makePi();
 
     syncNamespaceProxyTools({
-      config: { mcpServers: { "context-mode": { command: "context-mode" } } },
+      config: { settings: { namespaceProxyTools: true }, mcpServers: { "context-mode": { command: "context-mode" } } },
       cache: CACHE_SHAPE([["context-mode", { tools: [{ name: "ctx_execute" }] }]]),
       envOverride: null,
       existingDirectNames: new Set(),
@@ -382,7 +384,7 @@ describe("syncNamespaceProxyTools", () => {
     expect(registered.has("mcp__context_mode")).toBe(true);
 
     syncNamespaceProxyTools({
-      config: { mcpServers: {} },
+      config: { settings: { namespaceProxyTools: true }, mcpServers: {} },
       cache: { version: 1, servers: {} },
       envOverride: null,
       existingDirectNames: new Set(),
@@ -393,7 +395,8 @@ describe("syncNamespaceProxyTools", () => {
       getPiTools: () => [],
     });
 
-    expect(unregistered).toContain("mcp__context_mode");
+    expect(registered.has("mcp__context_mode")).toBe(true);
+    expect(unregistered).toEqual([]);
   });
 
   it("deactivates stale namespace proxies when hidden direct tools reserve their names", async () => {
@@ -402,7 +405,7 @@ describe("syncNamespaceProxyTools", () => {
     pi.registerTool({ name: "mcp__demo_search", execute: vi.fn() });
 
     syncNamespaceProxyTools({
-      config: { mcpServers: {} },
+      config: { settings: { namespaceProxyTools: true }, mcpServers: {} },
       cache: { version: 1, servers: {} },
       envOverride: null,
       existingDirectNames: new Set(["mcp__demo_search"]),
@@ -413,8 +416,8 @@ describe("syncNamespaceProxyTools", () => {
       getPiTools: () => [],
     });
 
-    expect(registered.has("mcp__demo_search")).toBe(false);
-    expect(unregistered).toContain("mcp__demo_search");
+    expect(registered.has("mcp__demo_search")).toBe(true);
+    expect(unregistered).toEqual([]);
   });
 
   it("keeps active direct tools when they replace stale namespace proxy names", async () => {
@@ -423,7 +426,7 @@ describe("syncNamespaceProxyTools", () => {
     pi.registerTool({ name: "mcp__demo_search", execute: vi.fn() });
 
     syncNamespaceProxyTools({
-      config: { mcpServers: {} },
+      config: { settings: { namespaceProxyTools: true }, mcpServers: {} },
       cache: { version: 1, servers: {} },
       envOverride: null,
       existingDirectNames: new Set(["mcp__demo_search"]),
@@ -439,6 +442,53 @@ describe("syncNamespaceProxyTools", () => {
     expect(unregistered).not.toContain("mcp__demo_search");
   });
 
+  it("reactivates only adapter-owned namespace removals", async () => {
+    const { syncNamespaceProxyTools } = await importSync();
+    const { pi, registered } = makePi();
+    let activeTools = ["bash", "mcp__demo"];
+    const adapterDeactivatedNames = new Set<string>();
+    const userDeactivatedNames = new Set<string>();
+    pi.getActiveTools = vi.fn(() => activeTools);
+    pi.setActiveTools = vi.fn((next: string[]) => { activeTools = next; });
+    registered.set("mcp__demo", { name: "mcp__demo", execute: vi.fn() });
+
+    const common = {
+      envOverride: null,
+      existingDirectNames: new Set<string>(),
+      existingNamespaceNames: new Set(["mcp__demo"]),
+      adapterDeactivatedNames,
+      userDeactivatedNames,
+      pi,
+      getState: () => null,
+      getInitPromise: () => null,
+      getPiTools: () => [],
+    };
+    syncNamespaceProxyTools({
+      ...common,
+      config: { mcpServers: { demo: { command: "demo" } }, settings: { namespaceProxyTools: false } },
+      cache: CACHE_SHAPE([["demo", { tools: [{ name: "search" }] }]]),
+    });
+    expect(activeTools).toEqual(["bash"]);
+    expect(adapterDeactivatedNames).toContain("mcp__demo");
+
+    syncNamespaceProxyTools({
+      ...common,
+      config: { mcpServers: { demo: { command: "demo" } }, settings: { namespaceProxyTools: true } },
+      cache: CACHE_SHAPE([["demo", { tools: [{ name: "search" }] }]]),
+    });
+    expect(activeTools).toContain("mcp__demo");
+    expect(adapterDeactivatedNames).not.toContain("mcp__demo");
+
+    activeTools = ["bash"];
+    userDeactivatedNames.add("mcp__demo");
+    syncNamespaceProxyTools({
+      ...common,
+      config: { mcpServers: { demo: { command: "demo" } }, settings: { namespaceProxyTools: true } },
+      cache: CACHE_SHAPE([["demo", { tools: [{ name: "search" }] }]]),
+    });
+    expect(activeTools).toEqual(["bash"]);
+  });
+
   it("removes stale namespace proxies from active tools without unregisterTool", async () => {
     const { syncNamespaceProxyTools } = await importSync();
     const { pi, registered } = makePi();
@@ -449,7 +499,7 @@ describe("syncNamespaceProxyTools", () => {
     registered.set("mcp__context_mode", { name: "mcp__context_mode", execute: vi.fn() });
 
     const result = syncNamespaceProxyTools({
-      config: { mcpServers: {} },
+      config: { settings: { namespaceProxyTools: true }, mcpServers: {} },
       cache: { version: 1, servers: {} },
       envOverride: null,
       existingDirectNames: new Set(),
@@ -465,13 +515,49 @@ describe("syncNamespaceProxyTools", () => {
     expect(activeTools).toEqual(["bash"]);
   });
 
+  it("reactivates namespace proxies after backoff removal and recovery", async () => {
+    const { syncNamespaceProxyTools } = await importSync();
+    const { pi, registered } = makePi();
+    let activeTools = ["bash"];
+    const names = new Set<string>();
+    pi.getActiveTools = vi.fn(() => activeTools);
+    pi.setActiveTools = vi.fn((nextActiveTools: string[]) => { activeTools = nextActiveTools; });
+
+    const sync = (unavailableServers: ReadonlySet<string>) => {
+      const result = syncNamespaceProxyTools({
+        config: { settings: { namespaceProxyTools: true }, mcpServers: { demo: { command: "demo" } } },
+        cache: CACHE_SHAPE([["demo", { tools: [{ name: "search" }] }]]),
+        envOverride: null,
+        existingDirectNames: new Set(),
+        existingNamespaceNames: names,
+        unavailableServers,
+        pi,
+        getState: () => null,
+        getInitPromise: () => null,
+        getPiTools: () => [],
+      });
+      for (const name of [...result.added, ...result.updated]) names.add(name);
+      for (const name of result.deactivated) names.delete(name);
+      return result;
+    };
+
+    expect(sync(new Set()).added).toEqual(["mcp__demo"]);
+    expect(activeTools).toEqual(["bash", "mcp__demo"]);
+    expect(sync(new Set(["demo"])).deactivated).toEqual(["mcp__demo"]);
+    expect(activeTools).toEqual(["bash"]);
+    expect(sync(new Set()).added).toEqual(["mcp__demo"]);
+    expect(activeTools).toEqual(["bash", "mcp__demo"]);
+    expect(registered.has("mcp__demo")).toBe(true);
+    expect(pi.unregisterTool).not.toHaveBeenCalled();
+  });
+
   it("skips colliding normalized server names without choosing by config order", async () => {
     const { syncNamespaceProxyTools } = await importSync();
     const { pi, registered } = makePi();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     syncNamespaceProxyTools({
-      config: { mcpServers: { "my-server": { command: "one" }, my_server: { command: "two" } } },
+      config: { settings: { namespaceProxyTools: true }, mcpServers: { "my-server": { command: "one" }, my_server: { command: "two" } } },
       cache: CACHE_SHAPE([
         ["my-server", { tools: [{ name: "one" }], definition: { command: "one" } }],
         ["my_server", { tools: [{ name: "two" }], definition: { command: "two" } }],
@@ -494,7 +580,7 @@ describe("syncNamespaceProxyTools", () => {
     const { pi, registered } = makePi();
 
     syncNamespaceProxyTools({
-      config: { mcpServers: { "数": { command: "unicode" }, _6570_: { command: "encoded" } } },
+      config: { settings: { namespaceProxyTools: true }, mcpServers: { "数": { command: "unicode" }, _6570_: { command: "encoded" } } },
       cache: CACHE_SHAPE([
         ["数", { tools: [{ name: "search" }], definition: { command: "unicode" } }],
         ["_6570_", { tools: [{ name: "search" }], definition: { command: "encoded" } }],
@@ -518,7 +604,7 @@ describe("syncNamespaceProxyTools", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
 
     syncNamespaceProxyTools({
-      config: { mcpServers: { "my-server": { command: "one" }, my_server: { command: "two" } } },
+      config: { settings: { namespaceProxyTools: true }, mcpServers: { "my-server": { command: "one" }, my_server: { command: "two" } } },
       cache: CACHE_SHAPE([
         ["my-server", { tools: [{ name: "one" }], definition: { command: "one" } }],
         ["my_server", { tools: [{ name: "two" }], definition: { command: "two" } }],
@@ -542,6 +628,7 @@ describe("syncNamespaceProxyTools", () => {
 
     syncNamespaceProxyTools({
       config: {
+        settings: { namespaceProxyTools: true },
         mcpServers: {
           "context-mode": { command: "context-mode" },
           "context7": { url: "https://mcp.context7.com/mcp" },
@@ -569,7 +656,7 @@ describe("syncNamespaceProxyTools", () => {
     const { pi } = makePi();
 
     const result = syncNamespaceProxyTools({
-      config: { mcpServers: { "context-mode": { command: "context-mode" } } },
+      config: { settings: { namespaceProxyTools: true }, mcpServers: { "context-mode": { command: "context-mode" } } },
       cache: CACHE_SHAPE([["context-mode", { tools: [{ name: "ctx_execute" }] }]]),
       envOverride: null,
       existingDirectNames: new Set(),
@@ -590,7 +677,7 @@ describe("syncNamespaceProxyTools", () => {
     const { pi, registered } = makePi();
 
     syncNamespaceProxyTools({
-      config: { mcpServers: { "my-server": { command: "one" } } },
+      config: { settings: { namespaceProxyTools: true }, mcpServers: { "my-server": { command: "one" } } },
       cache: CACHE_SHAPE([["my-server", { tools: [{ name: "one" }], definition: { command: "one" } }]]),
       envOverride: null,
       existingDirectNames: new Set(),
@@ -601,7 +688,7 @@ describe("syncNamespaceProxyTools", () => {
       getPiTools: () => [],
     });
     const result = syncNamespaceProxyTools({
-      config: { mcpServers: { my_server: { command: "two" } } },
+      config: { settings: { namespaceProxyTools: true }, mcpServers: { my_server: { command: "two" } } },
       cache: CACHE_SHAPE([["my_server", { tools: [{ name: "two" }], definition: { command: "two" } }]]),
       envOverride: null,
       existingDirectNames: new Set(),
@@ -634,7 +721,7 @@ describe("syncNamespaceProxyTools", () => {
     let currentState = state;
 
     syncNamespaceProxyTools({
-      config: { mcpServers: { demo: { command: "demo" } } },
+      config: { settings: { namespaceProxyTools: true }, mcpServers: { demo: { command: "demo" } } },
       cache: CACHE_SHAPE([["demo", { tools: [{ name: "search" }] }]]),
       envOverride: null,
       existingDirectNames: new Set(),
@@ -658,7 +745,7 @@ describe("syncNamespaceProxyTools", () => {
     const { pi, registered } = makePi();
 
     syncNamespaceProxyTools({
-      config: { mcpServers: { "context-mode": { command: "context-mode" } } },
+      config: { settings: { namespaceProxyTools: true }, mcpServers: { "context-mode": { command: "context-mode" } } },
       cache: CACHE_SHAPE([["context-mode", { tools: [{ name: "ctx_execute" }] }]]),
       envOverride: null,
       existingDirectNames: new Set(),

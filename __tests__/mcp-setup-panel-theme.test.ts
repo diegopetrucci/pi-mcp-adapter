@@ -74,6 +74,38 @@ describe("mcp setup panel theme and component rendering", () => {
     panel.dispose();
   });
 
+  it("renders every setup diff line without truncation", () => {
+    const { theme } = createTheme();
+    const diffLines = ["--- before", "+++ after", ...Array.from({ length: 24 }, (_, index) => `+line-${index + 1}`)];
+    const preview = {
+      path: "/tmp/mcp.json",
+      existed: true,
+      changed: true,
+      beforeText: "before",
+      afterText: "after",
+      diffText: diffLines.join("\n"),
+    };
+    const callbacks = createCallbacks();
+    callbacks.previewKnownServer = () => preview;
+    const panel = createMcpSetupPanel(
+      createDiscovery(),
+      callbacks,
+      {
+        mode: "empty",
+        onboardingState: { version: 1, sharedConfigHintShown: false, setupCompleted: false },
+        theme,
+      },
+      { requestRender: () => {} },
+      () => {},
+    );
+
+    for (let index = 0; index < 6; index++) panel.handleInput("\x1b[B");
+    const output = panel.render(120).join("\n");
+    expect(output).toContain("+line-24");
+    expect(output).not.toContain("more diff line");
+    panel.dispose();
+  });
+
   it("reapplies active styles to wrapped setup continuation lines", () => {
     const { theme } = createTheme();
     const discovery = createDiscovery();

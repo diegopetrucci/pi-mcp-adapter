@@ -11,7 +11,7 @@
 ## Fork sync policy
 
 - `docs/UPSTREAM-SYNC.md` is the source of truth for upstream intake work; read it before doing any sync work.
-- Keep this fork close to upstream `nicobailon/pi-mcp-adapter`, but use a non-rebase intake model: review upstream by release/tag or coherent feature cluster, then integrate via an explicit merge PR or squash-import PR.
+- Keep this fork close to upstream `nicobailon/pi-mcp-adapter`, but use a non-rebase, released-tag-only intake model: review one released upstream version tag and the commits reachable from it; do not use a moving branch or unreleased feature cluster as an intake boundary. Integrate each intake via an explicit merge PR or squash-import PR.
 - Record each intake in `.upstream-ledger.jsonl`; treat the git DAG plus that ledger as authoritative over patch-id/cherry heuristics.
 - Re-verify deliberate fork-only deltas listed in `docs/tlh-patch-inventory.md` after every upstream intake.
 - Treat upstream behavior, public MCP/tool contracts, config semantics, and user-visible workflows as the default unless a recorded fork delta or approved ticket says otherwise.

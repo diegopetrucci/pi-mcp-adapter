@@ -6,7 +6,7 @@ on:
       ref:
         description: Git ref to publish
         required: true
-        default: tlh-v2.11.0
+        default: tlh-v2.36.0
 
 permissions:
   contents: read
@@ -29,6 +29,12 @@ jobs:
 
       - name: Install npm
         run: npm install --global npm@^11.5.1
+
+      - name: Install package dependencies
+        run: npm ci
+
+      - name: Build public package artifacts
+        run: npm run build:public
 
       - name: "Preflight: fail if version is already published"
         env:

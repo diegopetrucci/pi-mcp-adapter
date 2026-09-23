@@ -59,6 +59,34 @@ function collectPosixProcessPids(rootPid: number, cleanupToken?: string): number
   return [...processPids];
 }
 
+function collectPosixDescendantPids(rootPid: number): number[] {
+  const result = runPosixPs(["-ax", "-o", "pid=,ppid="]);
+  if (result.status !== 0) {
+    throw new Error(`HTTP request headers command cleanup failed: ${psFailureReason(result)}`);
+  }
+
+  const childrenByParent = new Map<number, number[]>();
+  for (const line of result.stdout.split("\n")) {
+    const match = /^\s*(\d+)\s+(\d+)/.exec(line);
+    if (!match) continue;
+    const pid = Number(match[1]);
+    const ppid = Number(match[2]);
+    if (!Number.isInteger(pid) || !Number.isInteger(ppid)) continue;
+    const children = childrenByParent.get(ppid);
+    if (children) children.push(pid);
+    else childrenByParent.set(ppid, [pid]);
+  }
+
+  const processPids = new Set<number>();
+  const stack = [...(childrenByParent.get(rootPid) ?? [])];
+  while (stack.length > 0) {
+    const pid = stack.pop()!;
+    processPids.add(pid);
+    stack.push(...(childrenByParent.get(pid) ?? []));
+  }
+  return [...processPids];
+}
+
 function assertPosixProcessDiscoveryAvailable(): void {
   const result = runPosixPs(["axeww", "-o", "pid=,ppid=,command="]);
   if (result.status !== 0) {
@@ -86,6 +114,14 @@ function signalProcessGroup(pid: number, signal: NodeJS.Signals): void {
   }
 }
 
+function waitForCleanupStabilityPass(): void {
+  // A command can spawn an unref'd helper immediately before producing its
+  // final output. Give that helper time to exec and become visible in the
+  // process snapshot before declaring the descendant set stable.
+  const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(waitBuffer, 0, 0, 15);
+}
+
 function killRequestHeadersCommand(child: ChildProcess, trackedPosixDescendantPids = new Set<number>(), cleanupToken?: string): void {
   if (process.platform === "win32" && child.pid !== undefined) {
     const result = spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
@@ -111,7 +147,8 @@ function killRequestHeadersCommand(child: ChildProcess, trackedPosixDescendantPi
         const newPids = candidates.filter(pid => !frozenPids.has(pid));
         if (newPids.length === 0) {
           stablePasses++;
-          if (stablePasses >= 2) return;
+          if (stablePasses >= 3) return;
+          waitForCleanupStabilityPass();
           continue;
         }
         stablePasses = 0;
@@ -207,7 +244,7 @@ async function invokeRequestHeadersCommand(
     const trackPosixDescendants = () => {
       if (!USE_PROCESS_GROUP || child.pid === undefined || settled || trackingError) return;
       try {
-        for (const pid of collectPosixProcessPids(child.pid, cleanupToken)) trackedPosixDescendantPids.add(pid);
+        for (const pid of collectPosixDescendantPids(child.pid)) trackedPosixDescendantPids.add(pid);
       } catch (error) {
         trackingError = error instanceof Error ? error : new Error(String(error));
       }

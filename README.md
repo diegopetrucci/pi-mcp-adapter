@@ -21,10 +21,10 @@ But the MCP ecosystem has useful stuff - databases, browsers, APIs. This adapter
 ## Install
 
 ```bash
-pi install npm:@diegopetrucci/pi-mcp-adapter@2.11.0
+pi install npm:@diegopetrucci/pi-mcp-adapter@2.36.0
 ```
 
-TLH automation should use this exact pinned install target. This fork's published package exists to support that bundled tlh integration rather than serve as a general-purpose standalone release channel.
+TLH automation should use this exact pinned install target. The upstream `v2.36.0` tag is only the intake anchor; this fork's version `2.36.0` and planned `tlh-v2.36.0` tag remain TLH-owned. This fork's published package exists to support bundled tlh integration rather than serve as a general-purpose standalone release channel.
 
 Maintainer note: upstream intake policy for this fork lives in [`docs/UPSTREAM-SYNC.md`](./docs/UPSTREAM-SYNC.md), with fork-only delta tracking in [`docs/tlh-patch-inventory.md`](./docs/tlh-patch-inventory.md).
 
@@ -400,7 +400,7 @@ Secret values in `headers`, `bearerToken`, `oauth.clientSecret`, and stdio `env`
 
 For local desktop bearer tokens, `bearerTokenStore: true` can opt in to the adapter-owned credential-store namespace. It never falls back to plaintext if the store is unavailable, if the stored record is malformed, or if the stored URL differs from the effective server URL. Literal tokens, command tokens, and environment tokens keep precedence so existing configs do not change. Create or rotate a stored token with `pi-mcp-adapter token set <server>` (masked prompt on a terminal, or piped stdin such as `security find-generic-password -s my-token -w | pi-mcp-adapter token set <server>`); the record binds to the effective configured URL at write time. Token commands need Node 22.18+.
 
-On Linux, bearer-token and TypeSafe key storage also recover automatically when a native operation fails with `KeyRevoked`, including wrapped errors from a revoked inherited session keyring. Each failed read/write/remove is retried once through `keyctl session - <current runtime> <packaged helper>`, with a 10-second timeout and no plaintext fallback. This requires `keyctl` on `PATH` and a working credential store in the fresh session; other storage errors still fail closed. Set `PI_MCP_ADAPTER_DISABLE_KEYRING_RECOVERY=1` to disable this recovery. Normal Pi and token CLI launches need no special wrapper.
+On Linux, bearer-token storage also recovers automatically when a native operation fails with `KeyRevoked`, including wrapped errors from a revoked inherited session keyring. Each failed read/write/remove is retried once through `keyctl session - <current runtime> <packaged helper>`, with a 10-second timeout and no plaintext fallback. This requires `keyctl` on `PATH` and a working credential store in the fresh session; other storage errors still fail closed. Set `PI_MCP_ADAPTER_DISABLE_KEYRING_RECOVERY=1` to disable this recovery. Normal Pi and token CLI launches need no special wrapper.
 
 ### Shared MCP processes with rmcp-mux
 
@@ -417,20 +417,6 @@ To share one stdio MCP server across Pi sessions, run it under [`rmcp-mux`](http
 ```
 
 The adapter owns only its client socket and closes that connection when the Pi runtime stops. `rmcp-mux` owns the upstream process, request routing, initialization cache, restart policy, client limits, and socket permissions. Start and configure the mux separately; the adapter never discovers, starts, adopts, or stops its daemon. A socket is an explicit trusted local endpoint, so do not point unrelated projects or users at a mux service unless its tools, state, credentials, and filesystem access are intended to be shared.
-
-### Install from one URL
-
-Install an MCP endpoint without editing configuration:
-
-```js
-mcp({ action: "install", url: "https://example.com/mcp" })
-```
-
-Install validates and connects the endpoint. New entries use a name derived from the hostname and are saved to Pi's global MCP config; existing URL entries are reused without rewriting. Pass `server` to choose a name or `target: "project"` to save to the project's `.mcp.json`. Unsafe URLs, name collisions, and failed connections are not persisted.
-
-In exclusive config mode, a project target must be the active config path; otherwise use the global target. URL install cannot promote runtime-registered servers: save their complete definitions manually so required headers and transport/auth settings are retained.
-
-Public servers are ready immediately. For OAuth servers, the same action opens the authorization page and watches a reachable loopback callback. After the user grants consent, an `mcp-oauth-status` message returns the agent to connect the server and verify its discovered tools. Remote/headless callbacks retain the manual completion fallback below.
 
 ### Remote/headless OAuth
 
@@ -515,13 +501,12 @@ When any enabled server uses `eager` or `keep-alive`, initialization also starts
 | `oauthCredentialStore` | Set explicitly to `"encrypted-file"` for externally keyed AES-256-GCM storage (notably Windows OpenSSH network logons). Requires `PI_MCP_ADAPTER_OAUTH_FILE_KEY`; absent uses the OS credential store. |
 | `mcpServers.<name>.oauth.authorizationParams` | Extra authorization URL parameters for provider-specific OAuth extensions. Flow-owned parameters such as `client_id`, `redirect_uri`, `scope`, `state`, `code_challenge`, `response_type`, and `resource` cannot be overridden. |
 | `directTools` | Global default for all servers (default: false). `true`, `false`, or `"search"`. Per-server overrides this. |
-| `namespaceProxyTools` | Register per-server `mcp__<server>` wrappers (default: true). Set to `false` to omit them from the model's tool list; `mcp`, `mcpScript`, and direct tools are unaffected. References such as `mcp:<server>` that rely on a wrapper will no longer resolve. Run `/reload` after changing this setting. |
+| `namespaceProxyTools` | Register per-server `mcp__<server>` wrappers (default: false). Set to `true` to add them to the model's tool list; `mcp`, `mcpScript`, and direct tools are unaffected. References such as `mcp:<server>` that rely on a wrapper resolve only when enabled. Run `/reload` after changing this setting. |
 | `strictDirectToolArguments` | Validate direct-tool inputs against their advertised schemas and recover one JSON string layer for object and array properties (default: false). |
 | `directToolResultDetails` | Direct-tool result details: `"lean"` (default) or `"bounded"` to retain the guarded raw MCP result. |
 | `warnOnLargeDirectTools` | Show the advisory when 75 or more direct tools resolve (default: `true`). Set to `false` to suppress only this advisory. |
-| `freezeDirectTools` | Keep direct-tool registration stable after the initial sync so metadata updates and explicit reconnects do not rebuild the system prompt. Proxy/search/cache metadata still refreshes. Default: false. |
-| `scriptMode` | Register the MCP-only `mcpScript` plain-JavaScript tool (default: true). Set to `false` to hide it. |
-| `jev` | Optional TypeSafe Jev settings. A valid TypeSafe key enables semantic search across every enabled MCP server by default; `semanticSearch: false` disables it. `scriptEvaluation` remains disabled by default and requires an `allowedServers` source allowlist when enabled. Run `/mcp jev setup` for guided configuration. |
+| `freezeDirectTools` | Keep direct-tool registration stable after the initial sync so metadata updates and explicit reconnects do not rebuild the system prompt. Proxy/search/cache metadata still refreshes. Default: true. |
+| `scriptMode` | Register the MCP-only `mcpScript` plain-JavaScript tool (default: false). Set to `true` to opt in. |
 | `disableProxyTool` | Hide the `mcp` proxy tool once configured direct tools are fully available from cache. Ignored while any server uses `directTools: "search"`, whose tools are registered inactive and can only be activated through `mcp({ search })`. |
 | `autoAuth` | Auto-run OAuth on `connect`/tool calls when a server needs auth, then retry once (default: false). |
 | `sampling` | Allow MCP servers to sample through Pi models, honoring `modelPreferences.hints` before current/default fallback (default: true when UI approval is available). |
@@ -596,57 +581,7 @@ Set `"outputGuard": false` — or the env kill switch `MCP_OUTPUT_GUARD=0` — t
 
 ### MCP Scripting
 
-#### Jev semantic search and opt-in script evaluation
-
-A valid TypeSafe key makes semantic search available across every enabled MCP server; it does not run Jev searches automatically. A search uses Jev only when `searchMode: "semantic"` is explicitly requested. Jev ranks matching tools but never executes them. Script evaluation remains disabled until `scriptEvaluation: true` is configured. Requests use pinned model `jev-1.13.0` at the fixed origin `https://api.typesafe.ai`. Review TypeSafe's current [legal terms](https://docs.typesafe.ai/legal), including privacy and retention; a no-training commitment does not mean zero retention.
-
-```text
-Normal search
-mcp({ search: "calendar" })
-        │
-        └── local lexical search
-            no Jev request
-
-Explicit semantic search
-mcp({ search: "calendar", searchMode: "semantic" })
-        │
-        └── Jev ranks matching tools
-            no tool is executed
-```
-
-The quickest desktop setup is:
-
-```sh
-pi-mcp-adapter key set typesafe
-```
-
-That is enough to use semantic search across all enabled MCP tools. Run `/mcp jev setup` in Pi when you want to restrict which enabled servers may share semantic-search data. The command saves a project-scoped allowlist and reloads Pi automatically. Verify the stored credential at any time with `pi-mcp-adapter key status typesafe`.
-
-`TYPESAFE_API_KEY` is for CI/headless use and overrides the keyring. Stdio MCP subprocesses inherit the host environment by default, so set `inheritEnv: false` where they must not receive it. The script worker receives no key, SDK, endpoint, headers, or environment.
-
-Semantic search sends the query text, server names, normalized and original tool names, tool paths, and descriptions to TypeSafe. It does not send tool results. `allowedServers` restricts semantic search to named servers. `scriptEvaluation` is a separate opt-in that may send the state and MCP-derived results declared in each evaluation; when enabled, it requires an explicit source allowlist.
-
-```json
-{
-  "settings": {
-    "jev": {
-      "scriptEvaluation": true,
-      "allowedServers": ["github"],
-      "maxEvaluationTokensPerScript": 32768
-    }
-  }
-}
-```
-
-Request semantic discovery explicitly with `mcp({ search: "triage customer reports", searchMode: "semantic" })` or `tools.search({ query: "triage customer reports", searchMode: "semantic" })`. Regex is incompatible. Timeout, rate-limit, and service failures return marked lexical fallback; credential, policy, configuration, and response failures do not. If no allowed server has cached tools, search explains how to connect a server or update the allowlist; if Jev decides no tool fits, the result says that Jev abstained.
-
-Optional `jev` controls bound timeout/retries, request and script budgets, semantic candidates (at most 127), and minimum probability. The cumulative token budget uses provider-reported input plus output usage. Exact pre-response admission is unavailable without the provider tokenizer, so byte/question/state limits bound requests before dispatch; a response that exceeds the remaining token budget is discarded and exhausts it. The endpoint, headers, and SDK logging are not configurable.
-
-`await jev.evaluate({ state, questions, sources })` returns `{ ok, data }` or `{ ok: false, error }`. `sources` must name every MCP server represented in `state`. The host also conservatively taints the whole script with every server-attributed MCP call result or error: declared and observed sources must all be enabled and in `allowedServers`, so copying data or omitting/mislabeling `sources` cannot bypass policy. The taint remains for later direct evaluations and semantic searches even when the script did not retain the call result. Direct and semantic provider attempts share the per-script count, UTF-8 request-byte, token, and deadline budgets; later `tools.call` operations still require normal authentication and approval. See `examples/jev-semantic-filter.mjs` and `examples/jev-accessibility-loop.mjs`.
-
-Semantic search sends your request and the available tool descriptions to Jev, which works out which tools best match what you’re trying to do. In a live test with 12 everyday requests and 95 tools and resources, Jev chose the expected result first in 10 of 11 answerable cases and placed it second once. Regular text search found the expected result first in 5 cases. Jev also correctly returned no result for an unrelated request. This was a small test using one local setup, so results will vary with different tools and queries.
-
-For multi-call MCP work, write ordinary JavaScript: discover, inspect, call, loop, filter, chain, or fan out, then return one result. Run that code with the default-on `mcpScript` tool. For a single MCP call, search, describe, status check, or auth action, use `mcp` instead. Set `settings.scriptMode` to `false` to hide both the scripting tool and its bundled skill.
+For multi-call MCP work, write ordinary JavaScript: discover, inspect, call, loop, filter, chain, or fan out, then return one result. The MCP-only `mcpScript` tool is opt-in and remains hidden while `settings.scriptMode` is at its default `false`; set it to `true` to register the tool. For a single MCP call, search, describe, status check, or auth action, use `mcp` instead.
 
 The bundled `mcp-scripting` skill is manual-only by default, so its description is not added to the model's automatic skill context. Use `/skill:mcp-scripting` when you want its detailed workflow.
 
@@ -802,7 +737,7 @@ Models sometimes encode an object or array argument as a JSON string. Set `setti
 
 Set `settings.directToolResultDetails` to `"bounded"` when an extension needs structured MCP result fields in Pi's direct-tool result details. The same output guard limits apply. Small leading structured fields stay available, while large fields receive bounded summaries and the complete guarded result follows the output guard's spill-file policy. The default `"lean"` mode keeps the existing server and tool metadata only.
 
-If prompt-cache stability matters more than direct-tool hot-loading, set `settings.freezeDirectTools` to `true`. The initial direct-tool sync still runs, but later metadata updates and explicit reconnects keep the registered tool surface unchanged while proxy/search/cache metadata refreshes normally.
+Direct-tool registration is frozen after the initial sync by default (`settings.freezeDirectTools: true`) to preserve prompt-cache stability. Set it to `false` when later metadata updates and explicit reconnects should rebuild the registered tool surface; proxy/search/cache metadata still refreshes normally.
 
 When you change direct-tool toggles in `/mcp`, the extension updates direct tool registration in the current session. Broader setup writes from `/mcp setup` still use Pi's normal reload flow because they can add or restructure MCP config files.
 
@@ -900,14 +835,13 @@ Prefer `.mcp.json` for project-local shared MCP config and `~/.config/mcp/mcp.js
 | List server | `mcp({ server: "name" })` |
 | Search | `mcp({ search: "screenshot navigate", limit: 12, offset: 0 })` |
 | Describe | `mcp({ describe: "tool_name" })` |
-| Instructions | `mcp({ instructions: "name" })` |
 | Call | `mcp({ tool: "...", args: { key: "value" } })` |
 | Connect | `mcp({ connect: "server-name" })` |
 | UI messages | `mcp({ action: "ui-messages" })` |
 | Auth start | `mcp({ action: "auth-start", server: "name" })` |
 | Auth complete | `mcp({ action: "auth-complete", server: "name", args: { redirectUrl: "..." } })` |
 
-`mcp({ connect: "server-name" })` refreshes an already connected server, so new tools, resources, prompts, and instructions can load without restarting Pi.
+`mcp({ connect: "server-name" })` refreshes an already connected server, so new tools, resources, prompts, and cached server guidance can load without restarting Pi.
 
 MCP proxy and direct-tool results use compact self-rendered rows by default. Collapsed success output shows the call title, a bounded one-line input preview when arguments exist, and the first result line, with a `Ctrl+O to expand` hint when more text is hidden. The full result remains available when expanded and is still returned unchanged to the model. Set `settings.toolResultRendering` to `"boxed"` to restore the legacy boxed Pi row, or set `settings.collapsedResultLines` to `2` or `3` when you want more collapsed text.
 
@@ -942,7 +876,7 @@ When `includeSchemas` is enabled, search and describe render common JSON Schema 
 
 For HTTP servers, Pi reports HTTP 503 as temporary unavailability and does not add another immediate retry loop. Keep-alive servers keep cached metadata available and retry after 30 seconds, backing off to 5 minutes. Other failed connects run a one-request shape probe that can turn opaque transport errors into setup hints such as `endpoint returned HTML (200) — this URL does not appear to speak MCP`. Healthy connections are not probed.
 
-Servers that provide usage guidance via the MCP `instructions` field surface it through discovery paths: `mcp({ server: "name" })` includes a preview, and `mcp({ instructions: "name" })` returns the full text. Instructions are captured at connect time and cached alongside tool metadata, so they stay available without a live connection.
+Servers that provide usage guidance via the MCP `instructions` field surface a bounded preview through `mcp({ server: "name" })`. Instructions are captured at connect time and cached alongside tool metadata, so the preview remains available without a live connection.
 
 ## Commands
 
@@ -951,7 +885,6 @@ Servers that provide usage guidance via the MCP `instructions` field surface it 
 | `/mcp` | Interactive panel and first-run onboarding surface |
 | `/pi-mcp` | Alias for `/mcp` when the host reserves `/mcp` |
 | `/mcp setup` | Guided setup for imports, a minimal `.mcp.json`, curated known servers, RepoPrompt quick-add, and config-path inspection |
-| `/mcp jev setup` | Restrict which servers may share semantic-search data, save the project policy, and reload Pi |
 | `/mcp edit [project\|global]` | Open `.mcp.json` (default) or `~/.config/mcp/mcp.json` in an editor; Ctrl+G opens `$EDITOR`; saves a valid JSONC object and reloads |
 | `/mcp tools` | List all tools |
 | `/mcp prompts` | List all MCP prompts registered as slash commands |

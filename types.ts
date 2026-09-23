@@ -67,6 +67,7 @@ export interface McpStatusEventBus {
 
 // Import sources for config
 export type ImportKind = 
+  | "agents"
   | "cursor" 
   | "claude-code" 
   | "claude-desktop" 
@@ -585,8 +586,6 @@ export interface McpToolApprovalRequest {
   claim(handler: McpToolApprovalHandler): boolean;
 }
 
-export type { JevAnswer, JevErrorCode, JevEvaluateInput, JevEvaluationData, JevEvaluationEnvelope, JevJson, JevQuestion } from "./jev-contracts.ts";
-
 export interface McpSettings {
   toolPrefix?: ToolPrefix;
   /** Show the plug prefix in MCP status and connection text (default: true). Set to false to disable it. */
@@ -604,7 +603,7 @@ export interface McpSettings {
   idleTimeout?: number; // minutes, default 10, 0 to disable
   requestTimeoutMs?: number; // milliseconds, overrides the SDK request timeout when > 0
   directTools?: boolean | "search";
-  /** Register per-server mcp__<server> namespace proxies. Defaults to true. */
+  /** Register per-server mcp__<server> namespace proxies. Defaults to false. */
   namespaceProxyTools?: boolean;
   /**
    * Validate direct-tool inputs against the advertised schema after recovering
@@ -618,27 +617,8 @@ export interface McpSettings {
   directToolResultDetails?: "lean" | "bounded";
   /** Show the advisory when 75 or more direct tools resolve. Defaults to true. */
   warnOnLargeDirectTools?: boolean;
-  /** Register the trusted MCP-only JavaScript scripting tool. Defaults to true; set false to hide it. */
+  /** Register the trusted MCP-only JavaScript scripting tool. Defaults to false; set true to opt in. */
   scriptMode?: boolean;
-  /** Optional TypeSafe Jev integrations. A valid key enables semantic search; script evaluation remains disabled by default. */
-  jev?: false | {
-    semanticSearch?: boolean;
-    scriptEvaluation?: boolean;
-    /** Restrict semantic-search metadata and allow script-evaluation sources. Semantic search defaults to every enabled server. */
-    allowedServers?: string[];
-    model?: string;
-    requestTimeoutMs?: number;
-    maxRetries?: number;
-    maxStateBytes?: number;
-    maxQuestionsPerRequest?: number;
-    maxEvaluationsPerScript?: number;
-    maxEvaluationBytesPerScript?: number;
-    /** Cumulative provider-reported input plus output tokens per script. Defaults to 32768. */
-    maxEvaluationTokensPerScript?: number;
-    /** Maximum semantic candidates per request. Defaults to 127; range 2..127. */
-    semanticCandidateLimit?: number;
-    semanticMinProbability?: number;
-  };
   /** Render MCP tool results as compact self-rendered rows by default, or as the legacy boxed row. */
   toolResultRendering?: "compact" | "boxed";
   /** Number of result text lines to show before expansion. Supports 1, 2, or 3. Defaults to 1 in compact mode and 3 in boxed mode. */
@@ -648,7 +628,7 @@ export interface McpSettings {
   disableProxyTool?: boolean;
   /** Freeze direct-tool registration after the initial sync. Automatic metadata updates
    * and explicit reconnects won't rebuild the system prompt, preserving the
-   * prompt-cache prefix. Proxy/search/cache metadata still refreshes. Default: false. */
+   * prompt-cache prefix. Proxy/search/cache metadata still refreshes. Default: true. */
   freezeDirectTools?: boolean;
   autoAuth?: boolean;
   sampling?: boolean;

@@ -8,7 +8,7 @@ export interface KnownServerPreset {
 }
 export declare const KNOWN_SERVER_PRESETS: readonly KnownServerPreset[];
 interface ConfigSourceSpec {
-    id: "shared-global" | "agents-global" | "agents-nested-global" | "pi-global" | "shared-project-ancestor" | "pi-project-ancestor" | "shared-project" | "pi-project";
+    id: "shared-global" | "agents-global" | "agents-nested-global" | "pi-global" | "pi-global-canonical" | "explicit-read-only" | "pi-adapter-overlay" | "shared-project-ancestor" | "pi-project-ancestor" | "shared-project" | "pi-project";
     label: string;
     readPath: string;
     writePath: string;
@@ -16,6 +16,10 @@ interface ConfigSourceSpec {
     importKind?: string;
     shared: boolean;
     scope: "global" | "project";
+    /** Detection-only sources are visible to setup but never merged. */
+    active?: boolean;
+    /** Exclusive-mode Pi sources expose only adapter-owned overlay state. */
+    projection?: "adapter";
 }
 export interface ConfigDiscoveryPath {
     label: string;
@@ -29,8 +33,9 @@ export interface DiscoveredImportConfig {
 export interface ConfigDiscoverySource extends ConfigDiscoveryPath {
     id: ConfigSourceSpec["id"];
     scope: ConfigSourceSpec["scope"];
-    kind: "shared" | "pi";
+    kind: "shared" | "pi" | "explicit";
     serverCount: number;
+    active: boolean;
 }
 export interface ImportConfigSummary extends DiscoveredImportConfig {
     serverCount: number;
@@ -41,11 +46,11 @@ export interface HostConfigSummary extends ImportConfigSummary {
 export interface McpConfigConflict {
     serverName: string;
     sources: Array<{
-        kind: "shared" | "pi" | "host";
+        kind: "shared" | "pi" | "explicit" | "host";
         path: string;
     }>;
     winner: {
-        kind: "shared" | "pi" | "host";
+        kind: "shared" | "pi" | "explicit" | "host";
         path: string;
     };
 }
@@ -86,7 +91,7 @@ export interface ConfigWritePreview {
     diffText: string;
 }
 export type SharedConfigTarget = "project" | "global";
-export declare function getPiGlobalConfigPath(overridePath?: string): string;
+export declare function getPiGlobalConfigPath(overridePath?: string, cwd?: string): string;
 export declare function getGenericGlobalConfigPath(): string;
 export declare function getProjectConfigPath(cwd?: string): string;
 export declare function getProjectPiConfigPath(cwd?: string): string;
@@ -101,11 +106,7 @@ export declare function cloneMcpConfig(config: McpConfig): McpConfig;
 export declare function loadMcpConfig(overridePath?: string, cwd?: string): McpConfig;
 export declare function resolveConfiguredClaudePluginMcp(config: McpConfig, cwd?: string): McpConfig;
 export declare function discoverConfiguredClaudePluginSkills(config: McpConfig, cwd?: string): string[];
-export declare function writeSharedConfigText(filePath: string, text: string): void;
-export declare function writeJevSemanticSearchConfig(overridePath: string | undefined, cwd: string, allowedServers: string[], effectiveJev?: unknown): {
-    path: string;
-    changed: boolean;
-};
+export declare function writeSharedConfigText(filePath: string, text: string, cwd?: string): void;
 export interface ServerDisabledOverrideResult {
     path: string;
     changed: boolean;
@@ -116,8 +117,9 @@ export interface ServerDisabledOverrideResult {
  * writer never copies a server definition or its credentials into the file.
  */
 export declare function writeProjectServerDisabledOverride(overridePath: string | undefined, cwd: string, serverName: string, disabled: boolean): ServerDisabledOverrideResult;
-export declare function previewCompatibilityImports(importKinds: ImportKind[], overridePath?: string): ConfigWritePreview;
-export declare function ensureCompatibilityImports(importKinds: ImportKind[], overridePath?: string): {
+export declare function getPiOwnedGlobalConfigPath(overridePath?: string, cwd?: string): string;
+export declare function previewCompatibilityImports(importKinds: ImportKind[], overridePath?: string, cwd?: string): ConfigWritePreview;
+export declare function ensureCompatibilityImports(importKinds: ImportKind[], overridePath?: string, cwd?: string): {
     path: string;
     added: ImportKind[];
 };
@@ -126,9 +128,10 @@ export declare function previewStarterSharedConfig(target: SharedConfigTarget, c
 export declare function writeStarterSharedConfig(target: SharedConfigTarget, cwd?: string): string;
 export declare function previewStarterProjectConfig(cwd?: string): ConfigWritePreview;
 export declare function writeStarterProjectConfig(cwd?: string): string;
-export declare function previewSharedServerEntry(filePath: string, serverName: string, entry: ServerEntry): ConfigWritePreview;
-export declare function writeSharedServerEntry(filePath: string, serverName: string, entry: ServerEntry): string;
+export declare function previewSharedServerEntry(filePath: string, serverName: string, entry: ServerEntry, cwd?: string, target?: SharedConfigTarget): ConfigWritePreview;
+export declare function writeSharedServerEntry(filePath: string, serverName: string, entry: ServerEntry, cwd?: string, target?: SharedConfigTarget): string;
 export declare function getServerProvenance(overridePath?: string, cwd?: string): Map<string, ServerProvenance>;
-export declare function writeDirectToolsConfig(changes: Map<string, true | string[] | false>, provenance: Map<string, ServerProvenance>, fullConfig: McpConfig): void;
+export declare function previewDirectToolsConfig(changes: Map<string, true | string[] | false>, provenance: Map<string, ServerProvenance>, cwd?: string): ConfigWritePreview[];
+export declare function writeDirectToolsConfig(changes: Map<string, true | string[] | false>, provenance: Map<string, ServerProvenance>, _fullConfig: McpConfig, cwd?: string): void;
 export declare function resolveConfiguredOAuthDir(raw: unknown, cwd?: string): string | undefined;
 export {};

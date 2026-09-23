@@ -8,7 +8,10 @@ const mocks = vi.hoisted(() => ({
   initializeOAuth: vi.fn().mockResolvedValue(undefined),
   createOAuthRuntime: vi.fn((signal: AbortSignal) => ({ signal })),
   shutdownOAuth: vi.fn().mockResolvedValue(undefined),
-  loadMcpConfig: vi.fn(() => ({ mcpServers: {} })),
+  // Runtime registration tests need an active configured session. The
+  // zero-server cache-miss path is intentionally lazy and is covered by the
+  // facade lifecycle tests.
+  loadMcpConfig: vi.fn(() => ({ mcpServers: { bootstrap: { command: "bootstrap" } } })),
   cloneMcpConfig: vi.fn((config: unknown) => structuredClone(config)),
   discoverConfiguredClaudePluginSkills: vi.fn(() => []),
   resolveConfiguredClaudePluginMcp: vi.fn((config: unknown) => structuredClone(config)),
@@ -67,6 +70,7 @@ vi.mock("../config.ts", () => ({
 
 vi.mock("../metadata-cache.ts", () => ({
   loadMetadataCache: mocks.loadMetadataCache,
+  getMissingConfiguredDirectToolServers: mocks.getMissingConfiguredDirectToolServers,
 }));
 
 vi.mock("../direct-tool-surface.ts", () => ({
@@ -194,7 +198,7 @@ describe("runtime MCP server registration", () => {
     mocks.initializeOAuth.mockResolvedValue(undefined);
     mocks.createOAuthRuntime.mockImplementation((signal: AbortSignal) => ({ signal }));
     mocks.shutdownOAuth.mockResolvedValue(undefined);
-    mocks.loadMcpConfig.mockReturnValue({ mcpServers: {} });
+    mocks.loadMcpConfig.mockReturnValue({ mcpServers: { bootstrap: { command: "bootstrap" } } });
     mocks.cloneMcpConfig.mockImplementation((config: unknown) => structuredClone(config));
     mocks.loadMetadataCache.mockReturnValue(null);
     mocks.buildProxyDescription.mockReturnValue("MCP gateway");

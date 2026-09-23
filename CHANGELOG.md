@@ -7,28 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.36.0] - 2026-09-21
+## [2.36.0] - 2026-09-22
 
-### Highlights
+### TLH fork release - 2026-09-22 (adopted-with-exceptions)
 
-- Set up TypeSafe semantic search from Pi with `/mcp jev setup`.
-- Search every enabled MCP tool automatically when a TypeSafe key is available.
-- Use regex safety checks reliably on Windows with both native and Java backends.
-- Get clearer, non-duplicated guidance when tool catalogs are large or semantic search finds no match.
+> **Inherited upstream history (2.12–2.35):** retained for context only; the URL installer and Jev/TypeSafe integrations are excluded from this fork.
 
-### Added
+- Releases the fork-owned `@diegopetrucci/pi-mcp-adapter@2.36.0`; the planned Git tag is `tlh-v2.36.0`.
+- Adopts the compatible fixes from released upstream tag `v2.36.0` at `c00e66b5b959f3327ebefddd93fffe8d402694a3` through merge `f0fb751243ba9c0ce363312a51b50f7ed1dd2e63`. The upstream tag is an intake anchor only; TLH owns this fork's version and release identity.
+- Preserves TLH's lazy facade/runtime boundary, dim connected-server footer, explicit shared-versus-Pi-owned config writes, context-bounded model surface, and trusted OIDC publishing path.
+- Excludes the upstream model-facing URL installer and Jev/TypeSafe semantic-search integration, including their SDK, source, tests, examples, and generated artifacts.
+- Keeps the exact automation install pin: `pi install npm:@diegopetrucci/pi-mcp-adapter@2.36.0`.
 
-- `/mcp jev setup` checks for a TypeSafe credential, lets you restrict which MCP servers may share semantic-search data, saves the project policy, and reloads Pi automatically.
+See [`docs/UPSTREAM-SYNC.md`](docs/UPSTREAM-SYNC.md) and [`docs/tlh-patch-inventory.md`](docs/tlh-patch-inventory.md) for the released-tag-only intake boundary and exception audit.
 
-### Changed
+### Adopted upstream fixes
 
-- A valid TypeSafe key now enables semantic search across every enabled MCP tool by default, while script evaluation remains opt-in. Search now explains when an allowlist permits no servers, when permitted servers have no cached tools, and when none of the available tools match the request.
-
-### Fixed
-
-- Regex safety checks on Windows resolve recheck's native executable and JAR fallback correctly. `recheck` is intentionally pinned to `4.6.0-beta.3` until a stable fixed release is available. Thanks to [@LCubero](https://github.com/LCubero) for reporting [#623](https://github.com/nicobailon/pi-mcp-adapter/issues/623), and [@Kristinita](https://github.com/Kristinita) and [@makenowjust](https://github.com/makenowjust) for the upstream reproduction and fix.
-- Large direct-tool advisories now use Pi's renderer in interactive sessions, avoiding raw console output and duplicate warnings. Thanks to [@grivper](https://github.com/grivper) for issue [#633](https://github.com/nicobailon/pi-mcp-adapter/issues/633).
-- Windows contributors can run `npm test` again; the runner now launches npm through `cross-spawn` so hardened Node versions can execute `npm.cmd`. Thanks @insuffer for the fix.
+- Windows recheck paths and the native/JAR fallback remain reliable with the pinned `recheck` `4.6.0-beta.3` release.
+- Large direct-tool advisories use the host renderer without raw console duplication.
+- The test runner uses `cross-spawn` so hardened Windows Node versions can execute `npm.cmd`.
 
 ## [2.35.0] - 2026-09-20
 

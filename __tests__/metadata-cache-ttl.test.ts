@@ -6,6 +6,7 @@ import { McpServerManager } from "../server-manager.ts";
 import { computeServerHash, isServerCacheValid, loadMetadataCache, saveMetadataCache } from "../metadata-cache.ts";
 import { updateMetadataCache } from "../init.ts";
 import { resolveDirectTools } from "../direct-tools.ts";
+import { resolveDirectTools as resolveStartupDirectTools } from "../startup-mcp-facade.ts";
 import type { ServerCacheEntry, ServerEntry } from "../types.ts";
 
 const BASE_TIME = 1_700_000_000_000;
@@ -92,6 +93,31 @@ describe("metadata cache ttl hints", () => {
     const cached = loadMetadataCache()?.servers.demo;
     expect(cached).toMatchObject({ ttlMs: 5_000, cacheScope: "private" });
     expect(cached?.tools[0]).toEqual({ name: "search" });
+  });
+
+  it("writes implicit stdio cache hashes with the session cwd used by startup reads", () => {
+    const server = { ...definition(), directTools: true as const };
+    const sessionCwd = "/repo/session";
+
+    updateMetadataCache({
+      sessionCwd,
+      config: { mcpServers: { demo: server } },
+      manager: {
+        getConnection: () => ({
+          status: "connected",
+          tools: [{ name: "search" }],
+          resources: [],
+          prompts: [],
+        }),
+      },
+    } as any, "demo");
+
+    const cached = loadMetadataCache();
+    expect(cached?.servers.demo && isServerCacheValid(cached.servers.demo, server, undefined, sessionCwd)).toBe(true);
+    expect(cached?.servers.demo && isServerCacheValid(cached.servers.demo, server, undefined, "/repo/other")).toBe(false);
+    expect(resolveStartupDirectTools({ mcpServers: { demo: server } }, cached, "server", undefined, sessionCwd)
+      .map(tool => tool.originalName)).toEqual(["search"]);
+    expect(resolveStartupDirectTools({ mcpServers: { demo: server } }, cached, "server", undefined, "/repo/other")).toEqual([]);
   });
 
   it("persists a successful empty resource list as authoritative across reload", () => {

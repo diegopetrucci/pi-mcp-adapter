@@ -18,6 +18,21 @@ const packageJson = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf
   types?: string;
 };
 
+const packageLock = JSON.parse(readFileSync(join(repoRoot, "package-lock.json"), "utf-8")) as {
+  name: string;
+  version: string;
+  packages?: {
+    "": {
+      name?: string;
+      version?: string;
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+      peerDependencies?: Record<string, string>;
+      peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+    };
+  };
+};
+
 const hostPeerPackages = {
   "@earendil-works/pi-ai": { peer: "^0.84.1 || ^0.85.0 || ^0.86.0", dev: "0.86.0" },
   "@earendil-works/pi-tui": { peer: "*", dev: "0.86.0" },
@@ -32,18 +47,21 @@ describe("TLH package identity and release evidence", () => {
     const exactInstall = `pi install npm:${packageJson.name}@${packageJson.version}`;
 
     expect(packageJson.name).toBe("@diegopetrucci/pi-mcp-adapter");
-    expect(packageJson.version).toBe("2.11.0");
+    expect(packageJson.version).toBe("2.36.0");
     expect(packageJson.publishConfig).toMatchObject({ access: "public" });
     expect(readme).toContain(exactInstall);
-    expect(readme.match(/pi install npm:@diegopetrucci\/pi-mcp-adapter@2\.11\.0/g)).toHaveLength(1);
+    expect(readme.match(/pi install npm:@diegopetrucci\/pi-mcp-adapter@2\.36\.0/g)).toHaveLength(1);
   });
 
   it("keeps trusted publishing and the fork changelog evidence", () => {
     expect(releaseWorkflow).toContain("id-token: write");
     expect(releaseWorkflow).toContain("npm publish --access public --provenance");
-    expect(releaseWorkflow).toContain("default: tlh-v2.11.0");
-    expect(changelog).toContain("### TLH fork release - 2026-07-25");
-    expect(changelog).toContain("pi install npm:@diegopetrucci/pi-mcp-adapter@2.11.0");
+    expect(releaseWorkflow).toContain("default: tlh-v2.36.0");
+    expect(releaseWorkflow.indexOf("npm ci")).toBeLessThan(releaseWorkflow.indexOf("npm publish"));
+    expect(releaseWorkflow.indexOf("npm run build:public")).toBeLessThan(releaseWorkflow.indexOf("npm publish"));
+    expect(changelog).toContain("### TLH fork release - 2026-09-22 (adopted-with-exceptions)");
+    expect(changelog).toContain("> **Inherited upstream history (2.12–2.35):** retained for context only; the URL installer and Jev/TypeSafe integrations are excluded from this fork.");
+    expect(changelog).toContain("pi install npm:@diegopetrucci/pi-mcp-adapter@2.36.0");
     expect(changelog).toContain("docs/UPSTREAM-SYNC.md");
   });
 });
@@ -96,7 +114,7 @@ describe("package.json files", () => {
     }
   });
 
-  it("publishes every root runtime TypeScript module", () => {
+  it("publishes every root runtime TypeScript module and required package assets", () => {
     const publishedFiles = new Set(packageJson.files ?? []);
     const runtimeModules = readdirSync(repoRoot)
       .filter((entry) => entry.endsWith(".ts"))
@@ -105,6 +123,15 @@ describe("package.json files", () => {
 
     expect(runtimeModules.length).toBeGreaterThan(0);
     expect(runtimeModules.filter((entry) => !publishedFiles.has(entry))).toEqual([]);
+    expect([...publishedFiles]).toEqual(expect.arrayContaining([
+      "dist",
+      "skills",
+      "mcp-script-worker.mjs",
+      "mcp-keyring-helper.cjs",
+      "app-bridge.bundle.js",
+      "banner.png",
+    ]));
+    expect([...publishedFiles].filter((entry) => /(?:jev|semantic-search|mcp-install)/i.test(entry))).toEqual([]);
   });
 
   it("does not import the peer-dependent MCP app bridge from runtime modules", () => {
@@ -118,6 +145,22 @@ describe("package.json files", () => {
     );
 
     expect(offenders).toEqual([]);
+  });
+});
+
+describe("scoped lockfile and package/docs exclusions", () => {
+  it("matches the resolved scoped manifest and excludes retired integration artifacts", () => {
+    const lockRoot = packageLock.packages?.[""];
+    expect(packageLock.name).toBe(packageJson.name);
+    expect(packageLock.version).toBe(packageJson.version);
+    expect(lockRoot?.name).toBe(packageJson.name);
+    expect(lockRoot?.version).toBe(packageJson.version);
+    expect(lockRoot?.dependencies).toEqual(packageJson.dependencies);
+    expect(lockRoot?.devDependencies).toEqual(packageJson.devDependencies);
+    expect(lockRoot?.peerDependencies).toEqual(packageJson.peerDependencies);
+    expect(lockRoot?.peerDependenciesMeta).toEqual(packageJson.peerDependenciesMeta);
+    expect(packageJson.dependencies?.["@typesafe-ai/sdk"]).toBeUndefined();
+    expect(readme).not.toMatch(/Jev|TypeSafe|semantic-search|action:\s*["']install|Install from one URL/i);
   });
 });
 

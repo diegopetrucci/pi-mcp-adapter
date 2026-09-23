@@ -11,6 +11,12 @@ const MIN_PANEL_WIDTH = 24;
 const COMPACT_WIDTH = 60;
 const COMPACT_ACTION_ROWS = 7;
 const DESKTOP_PREVIEW_WIDTH = 74;
+type ConfigWritePreviews = ConfigWritePreview | ConfigWritePreview[];
+
+function formatWriteRefusalMessage(error: unknown): string {
+  const message = (error instanceof Error ? error.message : String(error)).replace(/\s+/g, " ").trim();
+  return `Write refused: ${message || "the destination is not writable"}.`;
+}
 
 function wrapText(text: string, width: number): string[] {
   if (width <= 8) return [text];
@@ -34,7 +40,7 @@ export interface SetupPanelCallbacks {
   previewImports: (imports: ImportKind[]) => ConfigWritePreview;
   previewStarterConfig: (target: SharedConfigTarget) => ConfigWritePreview;
   previewRepoPrompt: (target: SharedConfigTarget) => ConfigWritePreview | null;
-  previewKnownServer: (preset: KnownServerPreset, target: SharedConfigTarget) => ConfigWritePreview;
+  previewKnownServer: (preset: KnownServerPreset, target: SharedConfigTarget) => ConfigWritePreviews;
   adoptImports: (imports: ImportKind[]) => Promise<{ added: ImportKind[]; path: string }>;
   scaffoldConfig: (target: SharedConfigTarget) => Promise<{ path: string }>;
   addRepoPrompt: (target: SharedConfigTarget) => Promise<{ path: string; serverName: string }>;
@@ -96,6 +102,7 @@ class McpSetupPanelView implements Component {
     private readonly getState: () => McpSetupPanelViewState,
     private readonly callbacks: SetupPanelCallbacks,
     private readonly theme: McpPanelTheme,
+    private readonly onPreviewRefusal: (error: unknown) => void,
   ) {}
 
   render(width: number): string[] {
@@ -208,8 +215,12 @@ class McpSetupPanelView implements Component {
     const selected = state.discovery.imports
       .filter((entry) => state.selectedImports.has(entry.kind))
       .map((entry) => entry.kind);
-    const preview = this.callbacks.previewImports(selected);
-    lines.push(...this.formatWritePreview("Compatibility import write preview", preview, [], this.previewWidth(innerWidth)));
+    lines.push(...this.safeFormatWritePreview(
+      "Compatibility import write preview",
+      () => this.callbacks.previewImports(selected),
+      [],
+      this.previewWidth(innerWidth),
+    ));
     return lines;
   }
 
@@ -283,9 +294,9 @@ class McpSetupPanelView implements Component {
           "Run setup to adopt host-specific imports, inspect detected paths, and scaffold a minimal `.mcp.json` if needed.",
         ], previewW);
       case "adopt-imports":
-        return this.formatWritePreview(
+        return this.safeFormatWritePreview(
           "Compatibility import write preview",
-          this.callbacks.previewImports(state.discovery.imports
+          () => this.callbacks.previewImports(state.discovery.imports
             .filter((entry) => state.selectedImports.has(entry.kind))
             .map((entry) => entry.kind)),
           [
@@ -324,10 +335,12 @@ class McpSetupPanelView implements Component {
           "  host imports, .agents files, package MCP manifests, and Pi overrides",
           "",
           "Read order (later entries win):",
+          "   .agents entries below are detection-only and are not auto-loaded",
           "0. detected host configs (opt-in lowest-precedence fallback)",
           "1. ~/.config/mcp/mcp.json",
-          "2. ~/.agents/mcp.json",
-          "3. ~/.agents/mcp/mcp.json",
+          "2. ~/.agents/mcp.json (detected only; inactive)",
+          "3. ~/.agents/mcp/mcp.json (detected only; inactive)",
+          "   explicit imports: [\"agents\"] in standard/Pi config load both as read-only servers",
           "4. <Pi agent dir>/mcp.json",
           "5. configured ancestor root to parent(cwd), farthest first (opt-in)",
           `   per directory: .mcp.json, then ${getConfigDirName()}/mcp.json`,
@@ -345,35 +358,40 @@ class McpSetupPanelView implements Component {
           : ["No config paths were detected."], previewW);
       case "add-repoprompt": {
         const repoPrompt = state.discovery.repoPrompt;
-        const preview = this.callbacks.previewRepoPrompt(state.sharedConfigTarget);
-        if (!preview) {
-          return this.formatPreview(["RepoPrompt is not available to add from this setup screen."], previewW);
+        try {
+          const preview = this.callbacks.previewRepoPrompt(state.sharedConfigTarget);
+          if (!preview) {
+            return this.formatPreview(["RepoPrompt is not available to add from this setup screen."], previewW);
+          }
+          return this.formatWritePreview(
+            "RepoPrompt write preview",
+            preview,
+            [
+              `Executable: ${repoPrompt.executablePath ?? "not found"}`,
+              `Target: ${this.sharedTargetLabel(state)}`,
+              `Server name: ${repoPrompt.serverName ?? "repoprompt"}`,
+            ],
+            previewW,
+          );
+        } catch (error) {
+          this.onPreviewRefusal(error);
+          return this.formatWriteRefusal(error, previewW);
         }
-        return this.formatWritePreview(
-          "RepoPrompt write preview",
-          preview,
-          [
-            `Executable: ${repoPrompt.executablePath ?? "not found"}`,
-            `Target: ${this.sharedTargetLabel(state)}`,
-            `Server name: ${repoPrompt.serverName ?? "repoprompt"}`,
-          ],
-          previewW,
-        );
       }
       case "add-known-server": {
         const preset = action.preset;
         if (!preset) return this.formatPreview(["Known server preset is unavailable."], previewW);
-        return this.formatWritePreview(
+        return this.safeFormatWritePreview(
           `${preset.name} write preview`,
-          this.callbacks.previewKnownServer(preset, state.sharedConfigTarget),
+          () => this.callbacks.previewKnownServer(preset, state.sharedConfigTarget),
           [preset.summary, `Target: ${this.sharedTargetLabel(state)}`],
           previewW,
         );
       }
       case "scaffold-shared-config":
-        return this.formatWritePreview(
+        return this.safeFormatWritePreview(
           `${this.sharedTargetLabel(state)} starter write preview`,
-          this.callbacks.previewStarterConfig(state.sharedConfigTarget),
+          () => this.callbacks.previewStarterConfig(state.sharedConfigTarget),
           [
             "This writes a minimal config at the selected normal MCP setup path.",
             "It intentionally avoids adding a fake placeholder server that would fail on first reload.",
@@ -392,20 +410,39 @@ class McpSetupPanelView implements Component {
     return preview;
   }
 
-  private formatWritePreview(title: string, preview: ConfigWritePreview, intro: string[] = [], width = DESKTOP_PREVIEW_WIDTH): string[] {
+  private safeFormatWritePreview(
+    title: string,
+    getPreview: () => ConfigWritePreviews,
+    intro: string[] = [],
+    width = DESKTOP_PREVIEW_WIDTH,
+  ): string[] {
+    try {
+      return this.formatWritePreview(title, getPreview(), intro, width);
+    } catch (error) {
+      this.onPreviewRefusal(error);
+      return this.formatWriteRefusal(error, width);
+    }
+  }
+
+  private formatWriteRefusal(error: unknown, width = DESKTOP_PREVIEW_WIDTH): string[] {
+    return this.formatPreview([
+      formatWriteRefusalMessage(error),
+      "No changes will be made.",
+    ], width);
+  }
+
+  private formatWritePreview(title: string, preview: ConfigWritePreviews, intro: string[] = [], width = DESKTOP_PREVIEW_WIDTH): string[] {
     const lines: string[] = [];
     for (const line of intro) lines.push(...wrapText(line, width));
     if (intro.length > 0) lines.push("");
-    lines.push(...wrapText(`${title}: ${preview.path}`, width));
-    lines.push(...wrapText(preview.existed ? "Existing file detected. Showing exact before/after diff." : "New file will be created. Showing exact content diff.", width));
-    lines.push("");
-    const diffLines = preview.diffText.split("\n");
-    const maxLines = 18;
-    const shown = diffLines.slice(0, maxLines);
-    for (const line of shown) lines.push(...wrapText(line, width));
-    if (diffLines.length > maxLines) {
-      lines.push(...wrapText(`… ${diffLines.length - maxLines} more diff line${diffLines.length - maxLines === 1 ? "" : "s"}`, width));
-    }
+    const previews = Array.isArray(preview) ? preview : [preview];
+    previews.forEach((entry, index) => {
+      if (index > 0) lines.push("");
+      lines.push(...wrapText(`${title}: ${entry.path}`, width));
+      lines.push(...wrapText(entry.existed ? "Existing file detected. Showing exact before/after diff." : "New file will be created. Showing exact content diff.", width));
+      lines.push("");
+      for (const line of entry.diffText.split("\n")) lines.push(...wrapText(line, width));
+    });
     return lines;
   }
 
@@ -427,6 +464,7 @@ export class McpSetupPanel {
   private selectedImports = new Set<ImportKind>();
   private busy = false;
   private notice: { text: string; tone: "success" | "warning" | "muted" } | null = null;
+  private previewRefusalMessage: string | null = null;
   private tui: { requestRender(): void };
   private readonly view: McpSetupPanelView;
   private keys: PanelKeys;
@@ -442,7 +480,12 @@ export class McpSetupPanel {
   ) {
     this.tui = tui;
     this.keys = createPanelKeys(options.keybindings);
-    this.view = new McpSetupPanelView(() => this.getViewState(), callbacks, createMcpPanelTheme(options.theme));
+    this.view = new McpSetupPanelView(
+      () => this.getViewState(),
+      callbacks,
+      createMcpPanelTheme(options.theme),
+      (error) => { this.previewRefusalMessage = formatWriteRefusalMessage(error); },
+    );
     this.screen = options.mode;
     for (const entry of discovery.imports) {
       this.selectedImports.add(entry.kind);
@@ -546,17 +589,22 @@ export class McpSetupPanel {
 
     const actions = this.getActions();
     if (this.keys.selectUp(data)) {
+      this.previewRefusalMessage = null;
       this.actionCursor = Math.max(0, this.actionCursor - 1);
       this.tui.requestRender();
       return;
     }
     if (this.keys.selectDown(data)) {
+      this.previewRefusalMessage = null;
       this.actionCursor = Math.min(actions.length - 1, this.actionCursor + 1);
       this.tui.requestRender();
       return;
     }
     if (this.keys.selectConfirm(data)) {
       const selected = actions[this.actionCursor];
+      // Adopt-imports is a navigation action; the actual write is confirmed
+      // from the imports screen and is guarded there.
+      if (selected?.id !== "adopt-imports" && this.showPreviewRefusal()) return;
       if (selected) void this.runAction(selected);
     }
   }
@@ -585,6 +633,7 @@ export class McpSetupPanel {
       return;
     }
     if (this.keys.selectConfirm(data)) {
+      if (this.showPreviewRefusal()) return;
       void this.applySelectedImports();
     }
   }
@@ -609,6 +658,13 @@ export class McpSetupPanel {
         this.notice = { text: `Opened ${selected}`, tone: "success" };
       });
     }
+  }
+
+  private showPreviewRefusal(): boolean {
+    if (!this.previewRefusalMessage) return false;
+    this.notice = { text: `${this.previewRefusalMessage} No changes will be made.`, tone: "warning" };
+    this.tui.requestRender();
+    return true;
   }
 
   private async runAction(action: Action): Promise<void> {
@@ -724,6 +780,7 @@ export class McpSetupPanel {
   }
 
   render(width: number): string[] {
+    this.previewRefusalMessage = null;
     return this.view.render(width);
   }
 

@@ -1,10 +1,34 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const mocks = vi.hoisted(() => ({
   loadMcpConfig: vi.fn(),
   connect: vi.fn(),
 }));
+
+const originalHome = process.env.HOME;
+const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+let isolatedHome: string;
+
+beforeEach(() => {
+  // This race loads the metadata path during initialization. Keep the
+  // PI_CODING_AGENT_DIR-unset path entirely inside a disposable HOME.
+  isolatedHome = mkdtempSync(join(tmpdir(), "pi-mcp-stale-ctx-home-"));
+  mkdirSync(join(isolatedHome, ".pi", "agent"), { recursive: true });
+  process.env.HOME = isolatedHome;
+  delete process.env.PI_CODING_AGENT_DIR;
+});
+
+afterEach(() => {
+  if (originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = originalHome;
+  if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+  rmSync(isolatedHome, { recursive: true, force: true });
+});
 
 vi.mock("../config.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config.ts")>()),

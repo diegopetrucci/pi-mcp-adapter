@@ -2,20 +2,22 @@ import { existsSync, readFileSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { OverlayHandle } from "@earendil-works/pi-tui";
 import type { McpExtensionState } from "./state.ts";
-import { isServerDisabled, type McpAuthResult, type McpConfig, type McpPanelCallbacks, type McpPanelResult, type ImportKind } from "./types.ts";
+import { isServerDisabled, type McpAuthResult, type McpConfig, type McpPanelCallbacks, type McpPanelResult, type ImportKind, type ServerProvenance } from "./types.ts";
 import {
   ensureCompatibilityImports,
   getSharedConfigPath,
+  getPiOwnedGlobalConfigPath,
+  getProjectPiConfigPath,
   getMcpDiscoverySummary,
   getMcpStandardConfigSummary,
   type KnownServerPreset,
   type SharedConfigTarget,
   getServerProvenance,
   previewCompatibilityImports,
+  previewDirectToolsConfig,
   previewSharedServerEntry,
   previewStarterSharedConfig,
   writeDirectToolsConfig,
-  writeJevSemanticSearchConfig,
   writeProjectServerDisabledOverride,
   writeSharedServerEntry,
   writeSharedConfigText,
@@ -31,7 +33,6 @@ import { inspectBearerTokenForUrl, removeBearerToken } from "./mcp-bearer-store.
 import { loadOnboardingState, markSetupCompleted as persistSetupCompleted, markSharedConfigHintShown } from "./onboarding-state.ts";
 import { formatTerminalError, openPath, resolveServerUrl, sanitizeTerminalText } from "./utils.ts";
 import { isAbortError } from "./runtime-owner.ts";
-import { resolveJevCredential } from "./jev-key-store.ts";
 
 function terminalHyperlink(label: string, url: string): string {
   return `\u001B]8;;${sanitizeTerminalText(url)}\u001B\\${sanitizeTerminalText(label)}\u001B]8;;\u001B\\`;
@@ -50,6 +51,38 @@ function canRenderPanel(ctx: ExtensionContext): boolean {
   return ctx.hasUI && ctx.mode === "tui";
 }
 
+function sharedSetupEntry(entry: KnownServerPreset["entry"]): KnownServerPreset["entry"] {
+  const sharedEntry = { ...entry };
+  delete sharedEntry.directTools;
+  return sharedEntry;
+}
+
+function getSetupAdapterProvenance(
+  serverName: string,
+  entry: KnownServerPreset["entry"],
+  target: SharedConfigTarget,
+  cwd: string,
+): { changes: Map<string, true | string[] | false>; provenance: Map<string, ServerProvenance> } | null {
+  const directTools = entry.directTools;
+  if (directTools === undefined || directTools === "search") return null;
+  const path = target === "project" ? getProjectPiConfigPath(cwd) : getPiOwnedGlobalConfigPath(undefined, cwd);
+  return {
+    changes: new Map([[serverName, directTools]]),
+    provenance: new Map([[serverName, { path, kind: target === "project" ? "project" : "user" }]]),
+  };
+}
+
+function writeSetupAdapterOverride(
+  serverName: string,
+  entry: KnownServerPreset["entry"],
+  target: SharedConfigTarget,
+  cwd: string,
+): void {
+  const setup = getSetupAdapterProvenance(serverName, entry, target, cwd);
+  if (!setup) return;
+  writeDirectToolsConfig(setup.changes, setup.provenance, { mcpServers: {} }, cwd);
+}
+
 export async function editSharedConfig(ctx: ExtensionContext, target: SharedConfigTarget): Promise<boolean> {
   if (!ctx.hasUI) return false;
   const path = getSharedConfigPath(target, ctx.cwd);
@@ -57,84 +90,12 @@ export async function editSharedConfig(ctx: ExtensionContext, target: SharedConf
   const after = await ctx.ui.editor(`Edit ${path} (Ctrl+G opens $EDITOR)`, before);
   if (after === undefined || after === before) return false;
   try {
-    writeSharedConfigText(path, after);
+    writeSharedConfigText(path, after, ctx.cwd);
   } catch (error) {
     ctx.ui.notify(`MCP: not saved: ${formatTerminalError(error)}`, "error");
     return false;
   }
   return true;
-}
-
-export async function setupJevSemanticSearch(
-  state: McpExtensionState,
-  ctx: ExtensionContext,
-  configOverridePath?: string,
-): Promise<boolean> {
-  if (!ctx.hasUI) return false;
-  const credential = resolveJevCredential();
-  if (credential.status !== "present") {
-    const detail = credential.status === "unavailable" ? ` ${credential.message}` : "";
-    ctx.ui.notify(
-      `Jev needs a TypeSafe API key.${detail}\nRun \`pi-mcp-adapter key set typesafe\` in a terminal, then run \`/mcp jev setup\` again.`,
-      "error",
-    );
-    return false;
-  }
-
-  const servers = Object.keys(state.config.mcpServers)
-    .filter((name) => !isServerDisabled(state.config.mcpServers[name]))
-    .sort((a, b) => a.localeCompare(b));
-  if (servers.length === 0) {
-    ctx.ui.notify("Enable or add an MCP server before setting up Jev semantic search.", "error");
-    return false;
-  }
-  const configuredJev = state.config.settings?.jev;
-  const payloadDisclosure = configuredJev && configuredJev.scriptEvaluation
-    ? " Allowed servers can also be sources for script evaluations, which may send state and MCP results."
-    : " Semantic search does not send tool results.";
-
-  const choice = await ctx.ui.select("Configure Jev semantic search", [
-    `Use all ${servers.length} enabled servers (default)`,
-    "Restrict to selected servers",
-    "Cancel",
-  ]);
-  if (!choice || choice === "Cancel") return false;
-
-  let allowedServers: string[];
-  if (choice.startsWith("Use all ")) {
-    const confirmed = await ctx.ui.confirm(
-      "Share MCP tool metadata with Jev?",
-      `Semantic searches send the query text, server names, tool paths, tool names, and descriptions from ${servers.length} servers to TypeSafe.${payloadDisclosure}`,
-    );
-    if (!confirmed) return false;
-    allowedServers = servers;
-  } else {
-    allowedServers = [];
-    for (const server of servers) {
-      if (await ctx.ui.confirm(
-        `Allow ${server}?`,
-        `Semantic searches send the query text, server name, tool paths, tool names, and descriptions to TypeSafe.${payloadDisclosure}`,
-      )) allowedServers.push(server);
-    }
-    if (allowedServers.length === 0) {
-      ctx.ui.notify("Jev setup cancelled because no servers were allowed.", "info");
-      return false;
-    }
-  }
-
-  try {
-    const result = writeJevSemanticSearchConfig(configOverridePath, ctx.cwd, allowedServers, state.config.settings?.jev);
-    ctx.ui.notify(
-      result.changed
-        ? `Jev semantic search configured for ${allowedServers.length} server${allowedServers.length === 1 ? "" : "s"}. Reloading Pi…`
-        : "Jev semantic search is already configured for those servers.",
-      "info",
-    );
-    return result.changed;
-  } catch (error) {
-    ctx.ui.notify(`Jev setup failed: ${formatTerminalError(error)}`, "error");
-    return false;
-  }
 }
 
 export async function showStatus(state: McpExtensionState, ctx: ExtensionContext): Promise<void> {
@@ -192,7 +153,7 @@ export async function showStatus(state: McpExtensionState, ctx: ExtensionContext
     lines.push(`${statusIcon} ${name}: ${status}${toolSuffix}`);
   }
 
-  if (state.config.settings?.freezeDirectTools === true) {
+  if (state.config.settings?.freezeDirectTools !== false) {
     lines.push("", "Direct tools frozen; active registrations may differ from current metadata.");
   }
 
@@ -602,16 +563,21 @@ export async function openMcpSetup(
   let configChanged = false;
 
   const callbacks = {
-    previewImports: (imports: ImportKind[]) => previewCompatibilityImports(imports, configOverridePath),
+    previewImports: (imports: ImportKind[]) => previewCompatibilityImports(imports, configOverridePath, ctx.cwd),
     previewStarterConfig: (target: SharedConfigTarget) => previewStarterSharedConfig(target, ctx.cwd),
     previewRepoPrompt: (target: SharedConfigTarget) => {
       const repoPrompt = getMcpDiscoverySummary(configOverridePath, ctx.cwd, options).repoPrompt;
       if (!repoPrompt.entry || !repoPrompt.targetPath || !repoPrompt.serverName) return null;
-      return previewSharedServerEntry(getSharedConfigPath(target, ctx.cwd), repoPrompt.serverName, repoPrompt.entry);
+      return previewSharedServerEntry(getSharedConfigPath(target, ctx.cwd), repoPrompt.serverName, repoPrompt.entry, ctx.cwd, target);
     },
-    previewKnownServer: (preset: KnownServerPreset, target: SharedConfigTarget) => previewSharedServerEntry(getSharedConfigPath(target, ctx.cwd), preset.id, preset.entry),
+    previewKnownServer: (preset: KnownServerPreset, target: SharedConfigTarget) => {
+      const previews = [previewSharedServerEntry(getSharedConfigPath(target, ctx.cwd), preset.id, sharedSetupEntry(preset.entry), ctx.cwd, target)];
+      const setup = getSetupAdapterProvenance(preset.id, preset.entry, target, ctx.cwd);
+      if (setup) previews.push(...previewDirectToolsConfig(setup.changes, setup.provenance, ctx.cwd));
+      return previews;
+    },
     adoptImports: async (imports: ImportKind[]) => {
-      const result = ensureCompatibilityImports(imports, configOverridePath);
+      const result = ensureCompatibilityImports(imports, configOverridePath, ctx.cwd);
       if (result.added.length > 0) configChanged = true;
       return result;
     },
@@ -625,12 +591,20 @@ export async function openMcpSetup(
       if (!repoPrompt.entry || !repoPrompt.targetPath || !repoPrompt.serverName) {
         throw new Error("RepoPrompt is not available to add from this setup screen.");
       }
-      const path = writeSharedServerEntry(getSharedConfigPath(target, ctx.cwd), repoPrompt.serverName, repoPrompt.entry);
+      const path = writeSharedServerEntry(getSharedConfigPath(target, ctx.cwd), repoPrompt.serverName, repoPrompt.entry, ctx.cwd, target);
       configChanged = true;
       return { path, serverName: repoPrompt.serverName };
     },
     addKnownServer: async (preset: KnownServerPreset, target: SharedConfigTarget) => {
-      const path = writeSharedServerEntry(getSharedConfigPath(target, ctx.cwd), preset.id, preset.entry);
+      const sharedPath = getSharedConfigPath(target, ctx.cwd);
+      const sharedEntry = sharedSetupEntry(preset.entry);
+      const setup = getSetupAdapterProvenance(preset.id, preset.entry, target, ctx.cwd);
+      // Revalidate every destination before the first mutation so a refusal in
+      // the Pi adapter layer cannot leave a partial shared-config write behind.
+      previewSharedServerEntry(sharedPath, preset.id, sharedEntry, ctx.cwd, target);
+      if (setup) previewDirectToolsConfig(setup.changes, setup.provenance, ctx.cwd);
+      const path = writeSharedServerEntry(sharedPath, preset.id, sharedEntry, ctx.cwd, target);
+      if (setup) writeSetupAdapterOverride(preset.id, preset.entry, target, ctx.cwd);
       configChanged = true;
       return { path, serverName: preset.name };
     },
@@ -774,20 +748,36 @@ export async function openMcpPanel(
               }
             }
             if (!result.cancelled && result.changes.size > 0) {
-              writeDirectToolsConfig(result.changes, provenanceMap, config);
-              await onDirectToolsConfigChanged?.(result.changes);
-              ctx.ui.notify("Direct tools updated for this session.", "info");
+              try {
+                // Validate all targets before writing so an aliased destination
+                // cannot produce a partial multi-file update.
+                previewDirectToolsConfig(result.changes, provenanceMap, ctx.cwd);
+                writeDirectToolsConfig(result.changes, provenanceMap, config, ctx.cwd);
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                ctx.ui.notify(`Failed to update direct tools: ${message}`, "error");
+                done(undefined);
+                resolve();
+                return;
+              }
+              try {
+                await onDirectToolsConfigChanged?.(result.changes);
+                ctx.ui.notify("Direct tools updated for this session.", "info");
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                ctx.ui.notify(`Direct tools updated, but live refresh failed: ${message}`, "error");
+                configChanged = true;
+              }
             }
             done(undefined);
             resolve();
           })().catch((error) => {
             const message = error instanceof Error ? error.message : String(error);
-            ctx.ui.notify(`Direct tools updated, but live refresh failed: ${message}`, "error");
-            configChanged = true;
+            ctx.ui.notify(`MCP panel update failed: ${message}`, "error");
             done(undefined);
             resolve();
           });
-        }, { noticeLines, keybindings, theme });
+        }, { noticeLines, keybindings, theme, cwd: ctx.cwd });
       },
       {
         overlay: true,
@@ -847,6 +837,7 @@ export async function openMcpAuthPanel(
           keybindings,
           theme,
           noticeLines: ["Select an OAuth MCP server and press Enter or ctrl+a to authenticate."],
+          cwd: ctx.cwd,
         });
       },
       {

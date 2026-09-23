@@ -450,6 +450,7 @@ class McpPanel {
   private tui: { requestRender(): void };
   private readonly view: McpPanelView;
   private authOnly: boolean;
+  private readonly cwd: string | undefined;
   private keys: PanelKeys;
 
   static readonly MAX_VISIBLE = 12;
@@ -462,11 +463,12 @@ class McpPanel {
     private callbacks: McpPanelCallbacks,
     tui: { requestRender(): void },
     private done: (result: McpPanelResult) => void,
-    options: { noticeLines?: string[]; authOnly?: boolean; keybindings?: PanelKeybindings; theme?: Theme } = {},
+    options: { noticeLines?: string[]; authOnly?: boolean; keybindings?: PanelKeybindings; theme?: Theme; cwd?: string } = {},
   ) {
     this.tui = tui;
     this.noticeLines = options.noticeLines ?? [];
     this.authOnly = options.authOnly === true;
+    this.cwd = options.cwd;
     this.keys = createPanelKeys(options.keybindings);
     this.view = new McpPanelView(() => this.getViewState(), createMcpPanelTheme(options.theme));
     this.prefix = config.settings?.toolPrefix ?? "server";
@@ -475,7 +477,7 @@ class McpPanel {
       if (this.authOnly && !callbacks.canAuthenticate(serverName)) continue;
       const prov = provenance.get(serverName);
       const cachedEntry = this.cache?.servers?.[serverName];
-      const serverCache = cachedEntry && isServerCacheValid(cachedEntry, definition) ? cachedEntry : undefined;
+      const serverCache = cachedEntry && isServerCacheValid(cachedEntry, definition, undefined, this.cwd) ? cachedEntry : undefined;
 
       const globalDirect = config.settings?.directTools;
       let toolFilter: true | string[] | false = false;
@@ -978,7 +980,7 @@ class McpPanel {
       const cachedEntry = this.cache?.servers?.[otherServerName];
       const entry = otherServerName === serverName
         ? currentEntry
-        : cachedEntry && isServerCacheValid(cachedEntry, otherDefinition) ? cachedEntry : undefined;
+        : cachedEntry && isServerCacheValid(cachedEntry, otherDefinition, undefined, this.cwd) ? cachedEntry : undefined;
       if (!entry) continue;
       const otherPrefix = resolveToolPrefix(otherDefinition, this.prefix);
       for (const tool of entry.tools ?? []) {
@@ -1093,7 +1095,7 @@ export function createMcpPanel(
   callbacks: McpPanelCallbacks,
   tui: { requestRender(): void },
   done: (result: McpPanelResult) => void,
-  options?: { noticeLines?: string[]; authOnly?: boolean; keybindings?: PanelKeybindings; theme?: Theme },
+  options?: { noticeLines?: string[]; authOnly?: boolean; keybindings?: PanelKeybindings; theme?: Theme; cwd?: string },
 ): McpPanel & { dispose(): void } {
   return new McpPanel(config, cache, provenance, callbacks, tui, done, options ?? {});
 }

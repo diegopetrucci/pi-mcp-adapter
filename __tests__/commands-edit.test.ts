@@ -1,7 +1,7 @@
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 async function edit(ui: { editor: () => Promise<string>; notify: () => void }, cwd: string) {
   const { editSharedConfig } = await import("../commands.ts");
@@ -9,6 +9,14 @@ async function edit(ui: { editor: () => Promise<string>; notify: () => void }, c
 }
 
 describe("/mcp edit", () => {
+  const originalHome = process.env.HOME;
+
+  afterEach(() => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    vi.resetModules();
+  });
+
   it.each([
     ['{"mcpServers":{', "not saved"],
     ["null", "top-level value must be an object"],
@@ -30,6 +38,23 @@ describe("/mcp edit", () => {
 
     expect(await edit(ui, cwd)).toBe(true);
     expect(readFileSync(join(cwd, ".mcp.json"), "utf8")).toBe(text);
+  });
+
+  it("opens and saves the explicit global shared config with its full current content", async () => {
+    const home = mkdtempSync(join(tmpdir(), "mcp-edit-global-home-"));
+    const cwd = mkdtempSync(join(tmpdir(), "mcp-edit-global-project-"));
+    vi.stubEnv("HOME", home);
+    const path = join(home, ".config", "mcp", "mcp.json");
+    const before = '{\n  // shared\n  "mcpServers": {},\n}\n';
+    const after = '{\n  "mcpServers": {\"global\": {\"command\": \"demo\"}},\n}\n';
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, before);
+    const ui = { editor: vi.fn(async () => after), notify: vi.fn() };
+    const { editSharedConfig } = await import("../commands.ts");
+
+    expect(await editSharedConfig({ cwd, hasUI: true, ui } as any, "global")).toBe(true);
+    expect(ui.editor).toHaveBeenCalledWith(`Edit ${path} (Ctrl+G opens $EDITOR)`, before);
+    expect(readFileSync(path, "utf8")).toBe(after);
   });
 
   it("preserves an existing relative config symlink", async () => {

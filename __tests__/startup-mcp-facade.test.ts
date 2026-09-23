@@ -4,8 +4,9 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   getDirectToolParametersSchema,
-  getMissingConfiguredDirectToolServers,
+  getMissingStartupDirectToolServers,
   MCP_PROXY_TOOL_PARAMETERS_SCHEMA,
+  resolveDirectTools,
 } from "../startup-mcp-facade.ts";
 import { computeServerHash, type MetadataCache } from "../metadata-cache.ts";
 import type { McpConfig } from "../types.ts";
@@ -41,8 +42,29 @@ describe("startup MCP facade support", () => {
       },
     };
 
-    expect(getMissingConfiguredDirectToolServers(config, cache, "/repo/a")).toEqual(["stale", "missing"]);
-    expect(getMissingConfiguredDirectToolServers(config, cache, "/repo/b")).toEqual(["fresh", "stale", "missing"]);
+    expect(getMissingStartupDirectToolServers(config, cache, "/repo/a")).toEqual(["stale", "missing"]);
+    expect(getMissingStartupDirectToolServers(config, cache, "/repo/b")).toEqual(["fresh", "stale", "missing"]);
+  });
+
+  it("keeps direct search opt-in while marking its cached registrations lazy", () => {
+    const searchDefinition = { command: "node", args: ["search-server"], directTools: "search" as const };
+    const searchConfig: McpConfig = { mcpServers: { search: searchDefinition } };
+    const cache: MetadataCache = {
+      version: 1,
+      servers: {
+        search: {
+          configHash: computeServerHash(searchDefinition, "/repo/session"),
+          cachedAt: Date.now(),
+          tools: [{ name: "lookup", description: "Look up a record" }],
+          resources: [],
+        },
+      },
+    };
+
+    expect(resolveDirectTools(searchConfig, cache, "server", undefined, "/repo/session")).toMatchObject([
+      { prefixedName: "search_lookup", lazy: true },
+    ]);
+    expect(resolveDirectTools({ mcpServers: { search: { ...searchDefinition, directTools: undefined } } }, cache, "server", undefined, "/repo/session")).toEqual([]);
   });
 
   it("provides the same startup-time schemas used by index registration", () => {

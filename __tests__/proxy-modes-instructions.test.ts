@@ -43,12 +43,12 @@ describe("proxy instructions", () => {
     expect(result.details).toMatchObject({ mode: "list", hasInstructions: true });
   });
 
-  it("truncates long instructions in the listing and points at the instructions mode", () => {
+  it("truncates long instructions in the listing without unavailable gateway guidance", () => {
     const result = executeList(createState({ instructions: LONG_INSTRUCTIONS }), "demo");
 
     expect(result.content[0].text).toContain("Server instructions:");
     expect(result.content[0].text).not.toContain(LONG_INSTRUCTIONS);
-    expect(result.content[0].text).toContain('Use mcp({ instructions: "demo" }) for the full text.');
+    expect(result.content[0].text).not.toContain('mcp({ instructions: "demo" })');
   });
 
   it("leaves the listing unchanged when a server has no instructions", () => {
