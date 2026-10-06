@@ -21,6 +21,7 @@ import {
   openMcpAuthPanel,
   openMcpPanel,
   openMcpSetup,
+  setupJevSemanticSearch,
   editSharedConfig,
 } from "./commands.ts";
 import { flushMetadataCache, initializeMcp, updateStatusBar } from "./init.ts";
@@ -148,6 +149,7 @@ export interface McpRuntime {
       connect?: string;
       describe?: string;
       search?: string;
+      searchMode?: "lexical" | "semantic";
       regex?: boolean;
       includeSchemas?: boolean;
       limit?: number;
@@ -733,6 +735,22 @@ export function createMcpRuntime(
           }
           break;
         }
+        case "jev": {
+          if (parts[1] !== "setup" || parts.length !== 2) {
+            if (commandCtx.hasUI) commandCtx.ui.notify("Usage: /mcp-adapter jev setup", "error");
+            return;
+          }
+          if (config !== undefined) {
+            if (commandCtx.hasUI) commandCtx.ui.notify("Jev setup is unavailable when config is supplied by createMcpAdapter().", "info");
+            return;
+          }
+          const changed = await setupJevSemanticSearch(currentState, commandCtx, earlyConfigPath);
+          if (changed) {
+            await commandCtx.reload();
+            return;
+          }
+          break;
+        }
         case "edit": {
           if (parts.length > 2 || (targetServer !== undefined && targetServer !== "project" && targetServer !== "global")) {
             if (ctx.hasUI) ctx.ui.notify("Usage: /mcp edit [project|global]", "error");
@@ -997,7 +1015,7 @@ export function createMcpRuntime(
         return result;
       }
       if (params.search) {
-        const result = await executeSearch(state, params.search, params.regex, params.server, params.includeSchemas, params.limit, params.offset, undefined, executionSignal);
+        const result = await executeSearch(state, params.search, params.regex, params.server, params.includeSchemas, params.limit, params.offset, params.searchMode, executionSignal);
         assertCurrent();
         const details = result.details;
         if (toolSurface && details && typeof details === "object" && "matches" in details && Array.isArray(details.matches)) {

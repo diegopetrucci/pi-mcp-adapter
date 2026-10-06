@@ -666,6 +666,7 @@ describe("mcp runtime", () => {
 
     await runtime.handleSessionStart({}, ctx);
     const resultPromise = runtime.executeDirectTool(spec, "call-2", { q: "term" }, signal, onUpdate, ctx);
+    await vi.waitFor(() => expect(mocks.createDirectToolExecutor).toHaveBeenCalledWith(expect.any(Function), expect.any(Function), spec, false));
 
     expect(mocks.createDirectToolExecutor).toHaveBeenCalledWith(expect.any(Function), expect.any(Function), spec, false);
     expect(mocks.createDirectToolExecutor.mock.calls[0][0]()).toBeNull();

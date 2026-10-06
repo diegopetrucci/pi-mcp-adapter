@@ -44,7 +44,7 @@ vi.mock("../server-manager.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../server-manager.ts")>();
   return {
     ...actual,
-    McpServerManager: vi.fn(() => mocks.manager),
+    McpServerManager: vi.fn(function () { return mocks.manager; }),
   };
 });
 

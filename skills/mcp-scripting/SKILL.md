@@ -23,7 +23,7 @@ return issues.filter((issue) => issue.comments === 0).map((issue) => issue.numbe
 
 ## API
 
-- `await tools.search({ query, server?, regex?, limit?, offset? })` returns `{ items: [{ path, name, server, description? }], total, hasMore, nextOffset }`, plus `error: { code, message }` when the search cannot run. It is the same search as `mcp({ search })`; an empty `query` with `server` lists that server's tools. Filter the items in code; follow `nextOffset` for more than one page.
+- `await tools.search({ query, server?, regex?, searchMode?, limit?, offset? })` returns `{ items: [{ path, name, server, description? }], total, hasMore, nextOffset }`, plus `error: { code, message }` when the search cannot run. It is the same search as `mcp({ search })`; an empty `query` with `server` lists that server's tools. Filter the items in code; follow `nextOffset` for more than one page.
 - `await tools.describe({ path, server? })` returns `inputTypeScript` (plus `inputGuidance` when documented fields would otherwise be lost) and optional `annotations`. When the server declares an `outputSchema`, it describes `data.structuredContent`. Otherwise, once the tool has returned JSON (in this or an earlier `mcpScript` session), `observedOutput` gives `{ target, typeScript }`: where the JSON is, and the field names and types seen so far. It is a hint, not a contract.
 - `await tools.call(path, args, { server }?)` returns `{ ok: true, data }` or `{ ok: false, error: { code, message } }`. A failed call does not stop the script. When two servers share a tool name, pass the hit's `server` to `describe` and `call`.
 - Known paths can be called directly and resolve the same `{ ok, data }` way: `tools.github_search_issues(args)`, or `tools["server_tool-name"](args)` for hyphenated names. `tools` cannot be enumerated. `search`, `call`, `describe`, `then`, `catch`, `finally`, `toJSON`, `toString`, and `valueOf` are reserved; call a colliding path with `tools.call`.
@@ -41,3 +41,5 @@ Write the real script first instead of spending a turn looking at a result. Use 
 - Intermediate results share a fixed 16 MiB transfer budget per script. A result that does not fit returns `{ ok: false, error: { code: "intermediate_result_too_large" } }`, and the upstream call may still have had side effects.
 - Every call goes through the normal connection, auth, and approval gates. The result details list each search, describe, and call with its outcome and duration.
 - There are no fluent helpers such as `tools.find`, `tools.parallel`, or `tools.retry`; use loops and `Promise.all`.
+
+When `settings.jev.scriptEvaluation` is enabled, read [references/jev.md](references/jev.md) before calling `jev.evaluate`.

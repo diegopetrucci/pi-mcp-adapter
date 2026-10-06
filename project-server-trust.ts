@@ -201,7 +201,7 @@ export async function applyProjectServerTrust(
     const definitionHash = hashProjectServerDefinition(definition);
     const approved = approvals.approvals.some(entry =>
       entry.projectRoot === projectRoot && entry.serverName === name && entry.definitionHash === definitionHash);
-    if (projectTrusted && (approved || (!ctx.hasUI && loaded.projectServerPolicy === "allow"))) continue;
+    if (projectTrusted && (approved || loaded.projectServerPolicy === "allow")) continue;
 
     let reason: ProjectServerBlockReason;
     if (!projectTrusted) {

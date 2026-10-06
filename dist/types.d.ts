@@ -393,6 +393,7 @@ export interface McpToolApprovalRequest {
     signal?: AbortSignal;
     claim(handler: McpToolApprovalHandler): boolean;
 }
+export type { JevAnswer, JevErrorCode, JevEvaluateInput, JevEvaluationData, JevEvaluationEnvelope, JevJson, JevQuestion } from "./jev-contracts.ts";
 export interface McpSettings {
     /** Admission policy for unapproved project-local MCP servers. Only user-global config may set this. */
     projectServers?: "ask" | "allow";
@@ -434,6 +435,25 @@ export interface McpSettings {
     scriptSkill?: "manual" | "model";
     /** Expose MCP resources as tools (default: true). Set to false to disable globally across all servers. */
     exposeResources?: boolean;
+    /** Optional Jev (System One) integrations. A valid key enables semantic search; script evaluation remains disabled by default. */
+    jev?: false | {
+        semanticSearch?: boolean;
+        scriptEvaluation?: boolean;
+        /** Restrict semantic-search metadata and allow script-evaluation sources. Semantic search defaults to every enabled server. */
+        allowedServers?: string[];
+        model?: string;
+        requestTimeoutMs?: number;
+        maxRetries?: number;
+        maxStateBytes?: number;
+        maxQuestionsPerRequest?: number;
+        maxEvaluationsPerScript?: number;
+        maxEvaluationBytesPerScript?: number;
+        /** Cumulative provider-reported input plus output tokens per script. Defaults to 32768. */
+        maxEvaluationTokensPerScript?: number;
+        /** Maximum semantic candidates per request. Defaults to 127; range 2..127. */
+        semanticCandidateLimit?: number;
+        semanticMinProbability?: number;
+    };
     /** Render MCP tool results as compact self-rendered rows by default, or as the legacy boxed row. */
     toolResultRendering?: "compact" | "boxed";
     /** Number of result text lines to show before expansion. Supports 1, 2, or 3. Defaults to 1 in compact mode and 3 in boxed mode. */

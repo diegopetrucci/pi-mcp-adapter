@@ -22,6 +22,7 @@ import { callToolPausingForElicitation } from "./elicitation-handler.ts";
 import { paginate, rankSuggestions, rankToolMatches, resolveSearchKeywords, type RankedToolMatch } from "./search-ranking.ts";
 import { ensureToolCallApproved, isToolCallApprovalRequired, type ToolCallApprovalResult } from "./tool-approval.ts";
 import { describeFailure, isServerInActiveFailureBackoff } from "./failure-backoff.ts";
+import { semanticSearch, type SemanticSearchBackend, type SemanticSearchEvaluator } from "./semantic-search.ts";
 import { getInputRequiredNeedsUiDetails } from "./errors.ts";
 import { createJsonSchemaValidator } from "./json-schema-validator.ts";
 import { describeProjectServerBlock, disabledServerReason } from "./project-server-trust.ts";
@@ -826,7 +827,7 @@ function renderSearchResults(
   limit: number,
   offset: number,
   matches: Array<{ server: string; tool: ToolMetadata; score: number }>,
-  backend?: unknown,
+  backend?: SemanticSearchBackend,
 ): ProxyToolResult {
   const page = paginate(matches, offset, limit);
   if (page.total === 0) {
@@ -836,7 +837,9 @@ function renderSearchResults(
         .filter(name => !isServerDisabled(state.config.mcpServers[name]) && state.manager.isConnecting(name))
         .sort((a, b) => a.localeCompare(b));
     const scope = server ? ` in "${server}"` : "";
-    const msg = `No tools matching "${query}"${scope}`;
+    const msg = backend?.requested === "semantic" && backend.used === "semantic" && backend.abstained
+      ? `Jev found no suitable tool for "${query}"${scope}`
+      : `No tools matching "${query}"${scope}`;
     const connectingMessage = connectingServers.length === 1
       ? ` Server "${connectingServers[0]}" is still connecting; retry in a moment.`
       : connectingServers.length > 1
@@ -894,13 +897,13 @@ export interface ToolSearchInput {
   server?: string | undefined;
   searchMode?: unknown;
   signal?: AbortSignal | undefined;
-  semanticEvaluator?: unknown | undefined;
+  semanticEvaluator?: SemanticSearchEvaluator | undefined;
   observedSources?: readonly string[];
 }
 
 /** Ranked matches, unpaginated; each surface pages and renders them its own way. */
 export type ToolSearchOutcome =
-  | { matches: RankedToolMatch[]; backend?: unknown }
+  | { matches: RankedToolMatch[]; backend?: SemanticSearchBackend }
   | { error: ProxyToolResult };
 
 export function findTools(state: McpExtensionState, input: ToolSearchInput): ToolSearchOutcome | Promise<ToolSearchOutcome> {
@@ -917,8 +920,9 @@ export function findTools(state: McpExtensionState, input: ToolSearchInput): Too
     return failure("Semantic search cannot be combined with regex search.", { error: "invalid_search_mode", query });
   }
   if (searchMode === "semantic") {
-    // Semantic search is unavailable in this fork build.
-    return failure("Semantic search is not available in this fork build. Use lexical search (the default).", { error: "not_available", query });
+    return semanticSearch(state, query, server, input.signal, input.semanticEvaluator, input.observedSources).then(result => result.ok
+      ? { matches: result.matches, backend: result.backend }
+      : failure(`Semantic search failed: ${result.error.message}`, { error: result.error.code, message: result.error.message, query }));
   }
 
   if (regex) {
@@ -983,7 +987,7 @@ export function executeSearch(
   offset = 0,
   searchMode: "lexical" | "semantic" = "lexical",
   signal?: AbortSignal,
-  semanticEvaluator?: unknown,
+  semanticEvaluator?: SemanticSearchEvaluator,
 ): ProxyToolResult | Promise<ProxyToolResult> {
   const render = (outcome: ToolSearchOutcome): ProxyToolResult => "error" in outcome
     ? outcome.error

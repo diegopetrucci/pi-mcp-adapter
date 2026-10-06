@@ -84,14 +84,18 @@ describe("load-time initialization with project server overrides", () => {
 
   it("does not report trusted-project servers as blocked by project trust before session_start", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    vi.spyOn(console, "error").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const { default: mcpAdapter } = await import("../index.ts");
     const pi = createPi();
     mcpAdapter(pi.api);
 
     // The load-time runtime starts the global keep-alive server without a Pi context.
     const connected = () => connect.mock.calls.map(call => call[0]);
-    await vi.waitFor(() => expect(connected()).toContain("always"));
+    // Three seconds is a cold fixture import allowance, not a production startup deadline.
+    await vi.waitFor(() => expect(connected()).toContain("always"), { timeout: 3000 });
+    const unexpectedInitializationFailures = () => error.mock.calls.filter(([message]) =>
+      String(message).startsWith("MCP session initialization failed:"));
+    expect(unexpectedInitializationFailures()).toEqual([]);
     const warnings = () => warn.mock.calls.map(call => String(call[0]));
     expect(warnings().filter(message => message.includes("Project servers blocked"))).toEqual([]);
     expect(connected()).not.toContain("equibles");
@@ -111,6 +115,7 @@ describe("load-time initialization with project server overrides", () => {
     expect(select.mock.calls[0][0]).toContain("equibles");
     expect(warnings().filter(message => message.includes("blocked by project trust"))).toEqual([]);
     await vi.waitFor(() => expect(connected()).toContain("equibles"));
+    expect(unexpectedInitializationFailures()).toEqual([]);
 
     await pi.handlers.get("session_shutdown")?.({ type: "session_shutdown" });
   });

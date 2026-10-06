@@ -9,6 +9,7 @@ import { getAgentPluginSummaries, loadAgentPluginConfigs, type AgentPluginSummar
 import { cloneBuiltInAgentPluginEntry, isBuiltInAgentPlugin, mergeBuiltInAgentPluginEntries } from "./agent-plugin-provenance.ts";
 import { loadClaudePluginBundles } from "./claude-plugin-loader.ts";
 import { loadPackageMcpConfigs } from "./package-mcp-loader.ts";
+import { validateJevSettings } from "./jev-settings.ts";
 import { formatServerNamespace, isServerDisabled, type ClaudePluginConfig, type HostConfigDiscovery, type McpConfig, type OAuthConfig, type ServerEntry, type McpSettings, type ImportKind, type ServerProvenance } from "./types.ts";
 import { getMissingEnvVars, parseJsonWithComments, providerAuthUrlError, stripUtf8Bom, toStringRecord } from "./utils.ts";
 
@@ -1601,9 +1602,12 @@ function validateConfig(raw: unknown): McpConfig {
 
 function parseSettings(value: unknown): McpSettings {
   if (!isRecord(value)) throw new Error("settings must be an object");
-  // Preserve unknown settings for forward compatibility without advertising
-  // unsupported fork features in the typed configuration surface.
-  return { ...value } as McpSettings;
+  const settings = { ...value } as McpSettings;
+  if (value.jev !== undefined) {
+    validateJevSettings(value.jev);
+    settings.jev = value.jev as NonNullable<McpSettings["jev"]>;
+  }
+  return settings;
 }
 
 function parseClaudePlugins(value: unknown): ClaudePluginConfig[] {
@@ -1967,6 +1971,84 @@ export function writeSharedConfigText(filePath: string, text: string, cwd = proc
   writeConfigText(filePath, text, cwd, "shared");
 }
 
+/** Resolve Jev policy writes to the adapter-owned project layer by default. */
+function getJevSettingsWritePath(overridePath: string | undefined, cwd: string): string {
+  const projectPath = getProjectPiConfigPath(cwd);
+  const globalPath = getPiGlobalConfigPath(undefined, cwd);
+  const selectedPath = overridePath === undefined ? projectPath : getPiGlobalConfigPath(overridePath, cwd);
+  const selectedIdentity = getConfigPathIdentity(selectedPath);
+  const isAlias = (canonicalPath: string): boolean => (
+    selectedIdentity === getConfigPathIdentity(canonicalPath)
+    && (resolve(selectedPath) !== resolve(canonicalPath) || lstatSync(selectedPath, { throwIfNoEntry: false })?.isSymbolicLink() === true)
+  );
+  if (isAlias(projectPath) || isAlias(globalPath)) {
+    throw new Error(`Refusing to write Jev settings through aliased MCP config at ${selectedPath}`);
+  }
+  if (overridePath === undefined) return projectPath;
+  if (resolve(selectedPath) === resolve(projectPath)) return projectPath;
+  if (resolve(selectedPath) === resolve(globalPath)) return globalPath;
+  // Arbitrary explicit files remain read-only; use the existing guarded
+  // adapter-owned global overlay rather than mutating or copying them.
+  return getPiOwnedGlobalConfigPath(overridePath, cwd);
+}
+
+/**
+ * Preview the adapter-owned Jev policy change without writing either the
+ * selected read-only config or a shared/native MCP file.
+ */
+export function previewJevSemanticSearchConfig(
+  overridePath: string | undefined,
+  cwd: string,
+  allowedServers: string[],
+  effectiveJev?: unknown,
+): ConfigWritePreview {
+  const filePath = getJevSettingsWritePath(overridePath, cwd);
+  const intent = getPiWriteIntent(filePath, cwd);
+  const writablePath = resolveWritableConfigPath(filePath, cwd, intent);
+  const rawPath = getConfigPathIdentity(writablePath);
+  const raw = readRawConfigObject(rawPath);
+  if (raw.settings !== undefined && !isRecord(raw.settings)) {
+    throw new Error(`Failed to update Jev settings at ${rawPath}: settings must be an object`);
+  }
+  const settings = raw.settings as Record<string, unknown> | undefined;
+  const currentJev = settings?.jev;
+  if (currentJev !== undefined && currentJev !== false && !isRecord(currentJev)) {
+    throw new Error(`Failed to update Jev settings at ${rawPath}: settings.jev must be an object or false`);
+  }
+  const jev = isRecord(effectiveJev) ? effectiveJev : isRecord(currentJev) ? currentJev : {};
+  const nextServers = [...new Set(allowedServers)].sort((a, b) => a.localeCompare(b));
+  const nextJev = { ...jev, semanticSearch: true, allowedServers: nextServers };
+  validateJevSettings(nextJev);
+  const nextRaw = { ...raw, settings: { ...settings, jev: nextJev } };
+  return buildConfigWritePreview(writablePath, nextRaw, rawPath);
+}
+
+/** Persist Jev settings only in the Pi-owned adapter layer. */
+export function writeJevSemanticSearchConfig(
+  overridePath: string | undefined,
+  cwd: string,
+  allowedServers: string[],
+  effectiveJev?: unknown,
+): { path: string; changed: boolean } {
+  const filePath = getJevSettingsWritePath(overridePath, cwd);
+  const intent = getPiWriteIntent(filePath, cwd);
+  const writablePath = resolveWritableConfigPath(filePath, cwd, intent);
+  const rawPath = getConfigPathIdentity(writablePath);
+  const preview = previewJevSemanticSearchConfig(overridePath, cwd, allowedServers, effectiveJev);
+  if (!preview.changed) return { path: filePath, changed: false };
+  const raw = readRawConfigObject(rawPath);
+  const settings = raw.settings as Record<string, unknown> | undefined;
+  const currentJev = settings?.jev;
+  const jev = isRecord(effectiveJev) ? effectiveJev : isRecord(currentJev) ? currentJev : {};
+  const nextJev = {
+    ...jev,
+    semanticSearch: true,
+    allowedServers: [...new Set(allowedServers)].sort((a, b) => a.localeCompare(b)),
+  };
+  validateJevSettings(nextJev);
+  writeRawConfigObject(writablePath, { ...raw, settings: { ...settings, jev: nextJev } }, cwd, intent);
+  return { path: filePath, changed: true };
+}
 
 function getServersObject(raw: Record<string, unknown>, filePath: string): Record<string, ServerEntry> {
   for (const key of ["mcpServers", "mcp-servers"]) {

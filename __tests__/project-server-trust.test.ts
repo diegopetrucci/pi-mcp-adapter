@@ -186,7 +186,7 @@ describe("project MCP server trust", () => {
     expect(select).toHaveBeenCalledTimes(6);
   });
 
-  it("skips unapproved servers headlessly unless the global policy allows them", async () => {
+  it("ignores project policy and admits trusted project servers under global allow in both modes", async () => {
     writeJson(join(cwd, ".mcp.json"), { settings: { projectServers: "allow" }, mcpServers: { local: { command: "node" } } });
     let modules = await load();
     const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -201,6 +201,52 @@ describe("project MCP server trust", () => {
     loaded = modules.config.loadMcpConfigWithSources(undefined, cwd);
     expect(loaded.projectServerPolicy).toBe("allow");
     expect((await modules.trust.applyProjectServerTrust(loaded, context())).blockedServers.size).toBe(0);
+
+    const select = vi.fn();
+    expect((await modules.trust.applyProjectServerTrust(
+      loaded,
+      context({ hasUI: true, mode: "tui", ui: { select } }),
+    )).blockedServers.size).toBe(0);
+    expect(select).not.toHaveBeenCalled();
+    expect(existsSync(join(home, ".pi", "agent", "mcp-project-approvals.json"))).toBe(false);
+  });
+
+  it("blocks untrusted project servers under global allow without prompting", async () => {
+    writeJson(join(cwd, ".mcp.json"), { mcpServers: { local: { command: "node" } } });
+    writeJson(join(home, ".pi", "agent", "mcp-adapter.json"), { settings: { projectServers: "allow" }, mcpServers: {} });
+    const { config, trust } = await load();
+    const loaded = config.loadMcpConfigWithSources(undefined, cwd);
+    expect(loaded.projectServerPolicy).toBe("allow");
+
+    for (const hasUI of [true, false]) {
+      const select = vi.fn();
+      const result = await trust.applyProjectServerTrust(
+        loaded,
+        context({ hasUI, mode: hasUI ? "tui" : "rpc", ui: { select }, isProjectTrusted: () => false }),
+      );
+      expect(result.config.mcpServers.local.disabled).toBe(true);
+      expect(result.blockedServers.get("local")?.reason).toBe("untrusted");
+      expect(select).not.toHaveBeenCalled();
+    }
+    expect(existsSync(join(home, ".pi", "agent", "mcp-project-approvals.json"))).toBe(false);
+  });
+
+  it("prompts in trusted interactive sessions and skips in trusted headless sessions by default", async () => {
+    writeJson(join(cwd, ".mcp.json"), { mcpServers: { local: { command: "node" } } });
+    const { config, trust } = await load();
+    const loaded = config.loadMcpConfigWithSources(undefined, cwd);
+    expect(loaded.projectServerPolicy).toBe("ask");
+
+    const select = vi.fn().mockResolvedValue(undefined);
+    const interactive = await trust.applyProjectServerTrust(
+      loaded,
+      context({ hasUI: true, mode: "tui", ui: { select } }),
+    );
+    expect(interactive.blockedServers.get("local")?.reason).toBe("denied");
+    expect(select).toHaveBeenCalledTimes(1);
+
+    const headless = await trust.applyProjectServerTrust(loaded, context());
+    expect(headless.blockedServers.get("local")?.reason).toBe("approval-required");
   });
 
   it("denies on the preselected option or escape and keeps the server blocked for the session", async () => {

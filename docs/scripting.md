@@ -4,6 +4,14 @@ The opt-in `mcpScript` tool supports composable lexical search and multi-call MC
 
 For multi-call MCP work, write ordinary JavaScript: discover, inspect, call, loop, filter, chain, or fan out, then return one result. Run that code with the `mcpScript` tool, which is off by default; set `settings.scriptMode` to `true` to register it and its bundled skill. For a single MCP call, search, describe, status check, or auth action, use `mcp` instead.
 
+## Jev semantic search and evaluation
+
+Semantic search is explicit while lexical search remains the default. When a matching credential is available, an explicit `mcp({ searchMode: "semantic" })` request can use Jev; `settings.jev.semanticSearch: true` also enables it, while `settings.jev.semanticSearch: false` or `settings.jev: false` opts out. Without an explicit `allowedServers` list, all enabled eligible servers are considered; an explicit list restricts the request. The compact candidate catalog is sent to the configured Jev provider, not tool results, and ranked tools are returned without execution. The normal trust, approval, cancellation, and result-budget boundaries still apply.
+
+Jev evaluation is also opt-in. Script evaluation remains disabled until `settings.jev.scriptEvaluation` is explicitly enabled, and it uses the same configured server allowlist. Keep provider credentials in the adapter's credential store or supported environment configuration; do not put keys in scripts or tool arguments. The default provider endpoint is `https://api.typesafe.ai`.
+
+TypeSafe's provider privacy and retention terms are documented at `https://docs.typesafe.ai/legal` and include a no-training commitment; that no-training commitment does not mean zero retention. Stdio MCP subprocesses inherit the host environment, so a key present in the adapter process environment can propagate to an MCP child. The isolated script worker itself runs with an empty environment (`env: {}`) and does not receive provider keys or endpoints.
+
 The bundled `mcp-scripting` skill is manual-only: use `/skill:mcp-scripting`, or set `settings.scriptSkill` to `"model"` so the `mcpScript` description tells the model where to read it.
 
 For example, this is the JavaScript passed as the `code` argument to `mcpScript`:

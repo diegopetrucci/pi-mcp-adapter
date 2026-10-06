@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -34,7 +34,7 @@ const packageLock = JSON.parse(readFileSync(join(repoRoot, "package-lock.json"),
 };
 
 const hostPeerPackages = {
-  "@earendil-works/pi-ai": { peer: "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0 || ^0.99.0", dev: "0.99.1" },
+  "@earendil-works/pi-ai": { peer: "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0 || ^0.99.0 || ^1.0.0", dev: "0.99.1" },
   "@earendil-works/pi-tui": { peer: "*", dev: "0.99.1" },
   "typebox": { peer: "*", dev: "1.3.3" },
 };
@@ -47,10 +47,12 @@ describe("TLH package identity and release evidence", () => {
     const exactInstall = `pi install npm:${packageJson.name}@${packageJson.version}`;
 
     expect(packageJson.name).toBe("@diegopetrucci/pi-mcp-adapter");
-    expect(packageJson.version).toBe("2.36.0");
+    expect(packageJson.version).toBe("5.0.0");
     expect(packageJson.publishConfig).toMatchObject({ access: "public" });
     expect(readme).toContain(exactInstall);
-    expect(readme.match(/pi install npm:@diegopetrucci\/pi-mcp-adapter@2\.36\.0/g)).toHaveLength(1);
+    expect(readme.match(/pi install npm:@diegopetrucci\/pi-mcp-adapter@5\.0\.0/g)).toHaveLength(1);
+    expect(readme).toContain("The adapter does not modify Pi's user or project settings");
+    expect(readme).not.toContain("turns Pi's built-in MCP off in Pi's settings");
   });
 
   it("keeps trusted publishing and the fork changelog evidence", () => {
@@ -59,9 +61,10 @@ describe("TLH package identity and release evidence", () => {
     expect(releaseWorkflow).toContain("default: tlh-v2.36.0");
     expect(releaseWorkflow.indexOf("npm ci")).toBeLessThan(releaseWorkflow.indexOf("npm publish"));
     expect(releaseWorkflow.indexOf("npm run build:public")).toBeLessThan(releaseWorkflow.indexOf("npm publish"));
-    expect(changelog).toContain("### TLH fork release - 2026-09-23 (adopted-with-exceptions)");
-    expect(changelog).toContain("> **Inherited upstream history (2.12–2.35):** retained for context only; the URL installer and Jev/TypeSafe integrations are excluded from this fork.");
-    expect(changelog).toContain("pi install npm:@diegopetrucci/pi-mcp-adapter@2.36.0");
+    expect(changelog).toContain("### TLH fork notes - v5.0.0 (adopted-with-exceptions)");
+    expect(changelog).toContain("> **Inherited upstream history (2.12–2.35):** retained for context only. At the v2.36.0 intake boundary the URL installer and Jev/TypeSafe integrations were excluded; the Jev/TypeSafe exclusion is superseded by the v5.0.0 intake.");
+    expect(changelog).toContain("pi install npm:@diegopetrucci/pi-mcp-adapter@5.0.0");
+    expect(changelog).toContain("The adapter does not modify Pi's user or project settings");
     expect(changelog).toContain("docs/UPSTREAM-SYNC.md");
   });
 });
@@ -162,7 +165,18 @@ describe("package.json files", () => {
       "app-bridge.bundle.js",
       "banner.png",
     ]));
-    expect([...publishedFiles].filter((entry) => /(?:jev|semantic-search|mcp-install)/i.test(entry))).toEqual([]);
+    expect([...publishedFiles]).toEqual(expect.arrayContaining([
+      "jev-contracts.ts",
+      "jev-settings.ts",
+      "jev-key-store.ts",
+      "jev-client.ts",
+      "semantic-search.ts",
+      "examples/jev-semantic-filter.mjs",
+      "examples/jev-accessibility-loop.mjs",
+      "skills",
+    ]));
+    expect(existsSync(join(repoRoot, "skills", "mcp-scripting", "references", "jev.md"))).toBe(true);
+    expect([...publishedFiles].filter((entry) => /mcp-install/i.test(entry))).toEqual([]);
   });
 
   it("does not import the peer-dependent MCP app bridge from runtime modules", () => {
@@ -190,7 +204,8 @@ describe("scoped lockfile and package/docs exclusions", () => {
     expect(lockRoot?.devDependencies).toEqual(packageJson.devDependencies);
     expect(lockRoot?.peerDependencies).toEqual(packageJson.peerDependencies);
     expect(lockRoot?.peerDependenciesMeta).toEqual(packageJson.peerDependenciesMeta);
-    expect(packageJson.dependencies?.["@typesafe-ai/sdk"]).toBeUndefined();
+    expect(packageJson.dependencies?.["@typesafe-ai/sdk"]).toBe("0.6.0");
+    expect(lockRoot?.dependencies?.["@typesafe-ai/sdk"]).toBe("0.6.0");
     expect(readme).not.toMatch(/Jev|TypeSafe|semantic-search|action:\s*["']install|Install from one URL/i);
   });
 });
@@ -237,8 +252,9 @@ describe("package.json dependency policy", () => {
     );
     expect(productionLegacySdk).toEqual([]);
     expect(packageJson.dependencies?.["@modelcontextprotocol/sdk"]).toBeUndefined();
-    expect(packageJson.dependencies?.["@modelcontextprotocol/client"]).toBe("2.0.0");
-    expect(packageJson.dependencies?.["@modelcontextprotocol/core"]).toBe("2.0.0");
+    expect(packageJson.dependencies?.["@modelcontextprotocol/client"]).toBe("2.3.1");
+    expect(packageJson.dependencies?.["@modelcontextprotocol/core"]).toBe("2.3.1");
+    expect(packageJson.devDependencies?.vitest).toBe("4.1.11");
     expect(packageJson.devDependencies?.["@modelcontextprotocol/server"]).toBeUndefined();
   });
 });

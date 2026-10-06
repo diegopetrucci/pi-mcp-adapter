@@ -425,7 +425,7 @@ describe("cli token helper", () => {
   });
 });
 
-describe.skip("cli System One key helper", () => { // TLH: Jev/System One support is excluded from this build
+describe("cli System One key helper", () => {
   beforeEach(() => {
     vi.resetModules();
     process.env.PI_MCP_ADAPTER_TEST_AUTH_STORE = "memory";

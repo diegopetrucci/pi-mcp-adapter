@@ -1315,7 +1315,7 @@ describe("mcpAdapter session lifecycle", () => {
     expect(directTool.parameters).not.toHaveProperty("additionalProperties");
   });
 
-  it("waits for env-selected cold-cache tools before session startup completes", async () => {
+  it("does not block session startup but gates first input on cold-cache initialization", async () => {
     process.env.MCP_DIRECT_TOOLS = "demo/search";
     const config = {
       mcpServers: {
@@ -1325,18 +1325,30 @@ describe("mcpAdapter session lifecycle", () => {
     const state = createState();
     state.config = config;
     const initialization = createDeferred(state);
+    let initializationResolved = false;
+    void initialization.promise.then(() => { initializationResolved = true; });
     mocks.loadMcpConfig.mockReturnValue(config);
     mocks.getMissingConfiguredDirectToolServers.mockReturnValue(["demo"]);
     mocks.initializeMcp.mockReturnValue(initialization.promise);
 
     const { api, handlers } = await loadAdapter();
 
-    let sessionStarted = false;
-    const sessionStart = Promise.resolve(handlers.get("session_start")?.({}, { hasUI: false }))
-      .then(() => { sessionStarted = true; });
-    await new Promise(resolve => setImmediate(resolve));
+    const sessionStart = Promise.resolve(handlers.get("session_start")?.({}, { hasUI: false }));
+    await vi.waitFor(() => expect(mocks.initializeMcp).toHaveBeenCalled());
+    await sessionStart;
+    expect(initializationResolved).toBe(false);
 
-    expect(sessionStarted).toBe(false);
+    let inputCompleted = false;
+    let demoSearchRegisteredBeforeInputCompletion = false;
+    const input = Promise.resolve(handlers.get("input")?.({}, { hasUI: false }))
+      .then(result => {
+        demoSearchRegisteredBeforeInputCompletion = api.registerTool.mock.calls.some((call: any[]) => call[0]?.name === "demo_search");
+        inputCompleted = true;
+        return result;
+      });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(inputCompleted).toBe(false);
+    expect(api.registerTool).not.toHaveBeenCalledWith(expect.objectContaining({ name: "demo_search" }));
 
     mocks.resolveDirectTools.mockReturnValue([{
       serverName: "demo",
@@ -1345,8 +1357,9 @@ describe("mcpAdapter session lifecycle", () => {
       description: "Search demo",
     }]);
     initialization.resolve(state);
-    await sessionStart;
+    await expect(input).resolves.toEqual({ action: "continue" });
 
+    expect(demoSearchRegisteredBeforeInputCompletion).toBe(true);
     expect(api.registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: "demo_search" }));
   });
 
@@ -5062,7 +5075,12 @@ describe("mcpAdapter session lifecycle", () => {
     ]);
     expect(JSON.stringify(argsSchema)).not.toContain("patternProperties");
     expect(proxyTool.parameters.properties.server.description).toContain("describe operations");
-    expect(proxyTool.parameters.properties.searchMode).toBeUndefined();
+    expect(proxyTool.parameters.properties.searchMode).toMatchObject({
+      type: "string",
+      enum: ["lexical", "semantic"],
+    });
+    expect(proxyTool.parameters.properties.searchMode.description).toContain("default: lexical");
+    expect(proxyTool.parameters.properties.searchMode.description).toContain("semantic is available when a System One key is configured");
   });
 
   it("uses lexical search for model-facing proxy calls and forwards the request signal", async () => {

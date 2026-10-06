@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [5.0.0] - 2026-10-01
 
+### TLH fork notes - v5.0.0 (adopted-with-exceptions)
+
+> **Inherited upstream history (v2.37.0–v5.0.0):** retained as upstream context. The notes below do not by themselves claim adoption of the URL installer, native-settings write, benchmark, or VISION surfaces; the fork scope and exceptions are recorded here and in the intake ledger.
+
+This fork adopts the released upstream `v5.0.0` history with the following TLH release deltas and exceptions:
+
+- The fork keeps the scoped package identity `@diegopetrucci/pi-mcp-adapter` at version `5.0.0`; its optional `@earendil-works/pi-ai` peer range also accepts `^1.0.0`.
+- Dependency security remediation (pma-7uoj): production MCP client/core are pinned together to `2.3.1`, Vitest is exact `4.1.11`, and the approved resolved versions are SDK `1.32.1`, `brace-expansion` `5.0.12`, `proxy-addr` `2.0.8`, and `source-map-js` `1.2.2`; the candidate has no `tinypool` entry. The dev `@earendil-works/pi-coding-agent` pin is `1.0.1` to remove the `0.99.2` shrinkwrap that retained `brace-expansion` `5.0.9`. The dependency metadata/lockfile changes are accompanied by test-only Vitest 4 compatibility fixes in ten unprotected test files; no runtime, config, workflow, protected-test, or generated-dist files are changed by this remediation.
+- Candidate install pin for TLH automation: `pi install npm:@diegopetrucci/pi-mcp-adapter@5.0.0`; final validation and any later release publication or tagging remain pending.
+- The model-facing URL installer remains excluded. Upstream URL-install notes are inherited history only; `mcp-install` source and generated/package artifacts are not asserted as shipped fork surfaces.
+- Jev/System One semantic search and script evaluation are restored from upstream v5.0.0, reversing the historical v2.36.0 Jev/TypeSafe exclusion. The SDK dependency, Jev source/examples/reference, tests, and lazy import boundary are retained in the fork source and release checks.
+- The TLH `settings.projectServers: "allow"` delta admits unapproved project servers without an interactive prompt in trusted interactive or headless sessions. The default `"ask"` policy and untrusted-project blocking remain unchanged.
+- Pi's built-in MCP files remain supported inputs.
+- The adapter does not modify Pi's user or project settings.
+- `.agents` compatibility configs remain detection-only unless explicitly adopted.
+- Upstream benchmark and VISION documentation or artifacts remain inherited context only and are not asserted as fork package surfaces.
+- Shared initialization retains the first-use cwd/UI/model context without coupling the first caller's signal to shared startup. Request waits and execution remain caller-cancellable, while runtime ownership controls shutdown and replacement cancellation; the sampling `getSignal` boundary is owner-only, so complete semantic parity is not claimed.
+
 ### Highlights
 
 - The adapter now works with Pi's own MCP setup: servers added with `pi mcp add`, servers other extensions register, sign-ins made with Pi's built-in MCP, and provider tokens from Pi's `/login` all work here.
@@ -1218,13 +1236,13 @@ mcp({ tool: "my_tool", args: '{"key": "value"}' })
 
 ### TLH fork release - 2026-09-23 (adopted-with-exceptions)
 
-> **Inherited upstream history (2.12–2.35):** retained for context only; the URL installer and Jev/TypeSafe integrations are excluded from this fork.
+> **Inherited upstream history (2.12–2.35):** retained for context only. At the v2.36.0 intake boundary the URL installer and Jev/TypeSafe integrations were excluded; the Jev/TypeSafe exclusion is superseded by the v5.0.0 intake.
 
 - The fork-owned `@diegopetrucci/pi-mcp-adapter@2.36.0` was published to npm on 2026-09-23 through the trusted GitHub Actions OIDC/provenance workflow; the completed annotated Git tag `tlh-v2.36.0` points to the fork PR #15 integration merge `ead59f05a7f52878ee4234d5dc9568c361c7a732`.
 - Adopts the compatible fixes from released upstream tag `v2.36.0` at `c00e66b5b959f3327ebefddd93fffe8d402694a3` through the upstream intake merge `f0fb751243ba9c0ce363312a51b50f7ed1dd2e63`. The upstream tag is an intake anchor only; TLH owns this fork's version and release identity.
 - Preserves TLH's lazy facade/runtime boundary, dim connected-server footer, explicit shared-versus-Pi-owned config writes, context-bounded model surface, and trusted OIDC publishing path.
 - Ships explicit `/mcp` panel-save direct-tool reconciliation: persisted user changes bypass `freezeDirectTools` only for this requested refresh, lifecycle fencing ignores callbacks from replaced sessions, persistence provenance prevents runtime-only proxy registrations from being refreshed as persisted, and user-owned active-tool choices remain authoritative.
-- Excludes the upstream model-facing URL installer and Jev/TypeSafe semantic-search integration, including their SDK, source, tests, examples, and generated artifacts.
+- At the v2.36.0 intake boundary, the upstream model-facing URL installer and Jev/TypeSafe semantic-search integration were excluded, including their SDK, source, tests, examples, and generated artifacts; the v5.0.0 intake reverses the Jev/TypeSafe exclusion while retaining the URL-installer exclusion.
 - Keeps the exact automation install pin: `pi install npm:@diegopetrucci/pi-mcp-adapter@2.36.0`.
 
 See [`docs/UPSTREAM-SYNC.md`](docs/UPSTREAM-SYNC.md) and [`docs/tlh-patch-inventory.md`](docs/tlh-patch-inventory.md) for the released-tag-only intake boundary and exception audit.

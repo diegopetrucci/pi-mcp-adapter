@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -310,6 +310,48 @@ describe("commands onboarding", () => {
     expect(JSON.parse(readFileSync(join(project, ".pi", "mcp-adapter.json"), "utf-8"))).toEqual({
       mcpServers: { "parallel-search": { directTools: true } },
     });
+  });
+
+  it.each(["project", "global"] as const)("rejects known-server writes before mutating an aliased %s adapter destination", async (target) => {
+    const home = mkdtempSync(join(tmpdir(), `pi-mcp-commands-${target}-alias-home-`));
+    const project = mkdtempSync(join(tmpdir(), `pi-mcp-commands-${target}-alias-project-`));
+    process.env.HOME = home;
+    process.chdir(project);
+
+    const sharedPath = target === "project"
+      ? join(project, ".mcp.json")
+      : join(home, ".config", "mcp", "mcp.json");
+    const adapterPath = target === "project"
+      ? join(project, ".pi", "mcp-adapter.json")
+      : join(home, ".pi", "agent", "mcp-adapter.json");
+    const sharedText = '{\n  "mcpServers": {\n    "existing": { "command": "keep" }\n  }\n}\n';
+    mkdirSync(dirname(sharedPath), { recursive: true });
+    mkdirSync(dirname(adapterPath), { recursive: true });
+    writeFileSync(sharedPath, sharedText, "utf-8");
+    symlinkSync(sharedPath, adapterPath);
+
+    let addKnownServer: ((preset: any, selectedTarget: "project" | "global") => Promise<unknown>) | undefined;
+    mocks.createMcpSetupPanel.mockImplementationOnce((_discovery, callbacks, _options, _tui, done) => {
+      addKnownServer = callbacks.addKnownServer;
+      done();
+      return { dispose() {} };
+    });
+
+    const ui = createUi();
+    const { openMcpSetup } = await import("../commands.ts");
+    const result = await openMcpSetup({ config: { mcpServers: {} } } as any, {} as any, { hasUI: true, mode: "tui", ui, cwd: project } as any);
+    expect(result.configChanged).toBe(false);
+    expect(addKnownServer).toBeDefined();
+
+    const preset = {
+      id: "parallel-search",
+      name: "Parallel Search",
+      summary: "Search",
+      entry: { url: "https://search.parallel.ai/mcp", directTools: true },
+    };
+    await expect(addKnownServer!(preset, target)).rejects.toThrow(/Refusing to write MCP config/);
+    expect(readFileSync(sharedPath, "utf-8")).toBe(sharedText);
+    expect(lstatSync(adapterPath).isSymbolicLink()).toBe(true);
   });
 
   async function openSetupInFreshHome(installFigma: boolean) {

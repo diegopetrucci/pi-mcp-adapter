@@ -1,4 +1,4 @@
-import { lstatSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -40,7 +40,7 @@ function previewCallbacks(overrides: Record<string, unknown> = {}): any {
     previewImports: () => preview,
     previewStarterConfig: () => preview,
     previewRepoPrompt: () => null,
-    previewKnownServer: () => preview,
+    previewKnownServer: () => [preview],
     adoptImports: async () => ({ added: [], path: preview.path }),
     scaffoldConfig: async () => ({ path: preview.path }),
     addRepoPrompt: async () => ({ path: preview.path, serverName: "repoprompt" }),
@@ -54,6 +54,7 @@ function previewCallbacks(overrides: Record<string, unknown> = {}): any {
 describe("MCP setup write-preview refusals", () => {
   const originalHome = process.env.HOME;
   const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const originalConfigMode = process.env.PI_MCP_CONFIG_MODE;
   const originalCwd = process.cwd();
 
   afterEach(() => {
@@ -61,6 +62,8 @@ describe("MCP setup write-preview refusals", () => {
     else process.env.HOME = originalHome;
     if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+    if (originalConfigMode === undefined) delete process.env.PI_MCP_CONFIG_MODE;
+    else process.env.PI_MCP_CONFIG_MODE = originalConfigMode;
     process.chdir(originalCwd);
     vi.resetModules();
   });
@@ -146,5 +149,61 @@ describe("MCP setup write-preview refusals", () => {
     expect(scaffoldConfig).not.toHaveBeenCalled();
     expect(lstatSync(sharedPath).isSymbolicLink()).toBe(true);
     panel.dispose();
+  });
+
+  it.each(["project", "global"] as const)("contains known-server preview refusal and leaves the %s shared file unchanged", async (target) => {
+    const home = mkdtempSync(join(tmpdir(), `pi-mcp-setup-known-${target}-home-`));
+    const cwd = mkdtempSync(join(tmpdir(), `pi-mcp-setup-known-${target}-cwd-`));
+    process.env.HOME = home;
+    delete process.env.PI_CODING_AGENT_DIR;
+    delete process.env.PI_MCP_CONFIG_MODE;
+    process.chdir(cwd);
+
+    const sharedPath = target === "project"
+      ? join(cwd, ".mcp.json")
+      : join(home, ".config", "mcp", "mcp.json");
+    const adapterPath = target === "project"
+      ? join(cwd, ".pi", "mcp-adapter.json")
+      : join(home, ".pi", "agent", "mcp-adapter.json");
+    const sharedText = '{\n  "mcpServers": {\n    "existing": { "command": "keep" }\n  }\n}\n';
+    mkdirSync(dirname(sharedPath), { recursive: true });
+    mkdirSync(dirname(adapterPath), { recursive: true });
+    writeFileSync(sharedPath, sharedText, "utf8");
+    symlinkSync(sharedPath, adapterPath);
+
+    let resolvePanel!: (panel: { handleInput: (data: string) => void; render: (width: number) => string[] }) => void;
+    const panelReady = new Promise<{ handleInput: (data: string) => void; render: (width: number) => string[] }>((resolve) => {
+      resolvePanel = resolve;
+    });
+    const ui = {
+      custom: vi.fn((factory: any) => {
+        const panel = factory({ requestRender: vi.fn(), terminal: { rows: 40 } }, undefined, undefined, vi.fn());
+        resolvePanel(panel);
+        return panel;
+      }),
+    } as any;
+    const { openMcpSetup } = await import("../commands.ts");
+    const resultPromise = openMcpSetup(
+      { config: { mcpServers: {} } } as any,
+      {} as any,
+      { hasUI: true, mode: "tui", cwd, ui } as any,
+    );
+    const panel = await panelReady;
+    if (target === "project") {
+      for (let index = 0; index < 4; index += 1) panel.handleInput("\x1b[B");
+    } else {
+      panel.handleInput("\x1b[B");
+      panel.handleInput("\r");
+      for (let index = 0; index < 3; index += 1) panel.handleInput("\x1b[B");
+    }
+    const output = panel.render(120).join("\n");
+    expect(output).toContain("Write refused:");
+    expect(output).toContain("No changes will be made.");
+    panel.handleInput("\r");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(readFileSync(sharedPath, "utf8")).toBe(sharedText);
+    expect(lstatSync(adapterPath).isSymbolicLink()).toBe(true);
+    panel.handleInput("\x1b");
+    await expect(resultPromise).resolves.toEqual({ configChanged: false });
   });
 });

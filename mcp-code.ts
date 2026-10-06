@@ -4,7 +4,10 @@ import { Worker } from "node:worker_threads";
 import { throwIfAborted } from "./abort.ts";
 import { guardMcpOutput, guardedMcpDetails, resolveMcpOutputGuardOptions } from "./mcp-output-guard.ts";
 import { loadMcpScriptWasm, resolveMcpScriptQuickJsUrl } from "./mcp-script-wasm.ts";
+import { validateJevSettings } from "./jev-settings.ts";
+import type { JevErrorCode, JevEvaluateInput, JevEvaluationEnvelope } from "./jev-contracts.ts";
 import { executeCall, findTools, resolveDescribeTarget, unscopedCallReachesServer } from "./proxy-modes.ts";
+import type { SemanticSearchEvaluator } from "./semantic-search.ts";
 import { combineAbortSignals } from "./runtime-owner.ts";
 import { paginate } from "./search-ranking.ts";
 import type { McpExtensionState } from "./state.ts";
@@ -142,12 +145,20 @@ function parseWorkerMessage(value: unknown): WorkerMessage | null {
   return null;
 }
 
+export type McpScriptJevEvaluator = (
+  state: McpExtensionState,
+  input: JevEvaluateInput,
+  options: { purpose: "script"; signal?: AbortSignal; observedSources?: readonly string[] },
+) => Promise<JevEvaluationEnvelope>;
+
 export async function runMcpScript(
   state: McpExtensionState,
   code: string,
   timeoutMs = DEFAULT_MCP_SCRIPT_TIMEOUT_MS,
   getPiTools?: () => ToolInfo[],
   signal?: AbortSignal,
+  jevEvaluator?: McpScriptJevEvaluator,
+  semanticEvaluator?: SemanticSearchEvaluator,
 ) {
   const resolvedTimeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0
     ? Math.floor(timeoutMs)
@@ -234,17 +245,74 @@ export async function runMcpScript(
     return { dataJson };
   };
 
-  // Jev script evaluation is unavailable in this fork build.
-  type EvalResult = { ok: boolean; error?: { code: string; message: string } };
-  const admitEvaluation = (_input: unknown): EvalResult => ({
-    ok: false,
-    error: { code: "not_available", message: "Jev script evaluation is not available in this fork build." },
-  });
-  const evaluate = async (_input: unknown): Promise<WorkerResultPayload> => ({
-    envelope: admitEvaluation(_input),
-  });
+  const jevSettings = validateJevSettings(state.config.settings?.jev);
+  let evaluationAttempts = 0;
+  let evaluationBytes = 0;
+  let evaluationTokensRemaining = jevSettings.maxEvaluationTokensPerScript;
+  const tokenBudgetExhausted = (): JevEvaluationEnvelope => ({ ok: false, error: { code: "budget_exhausted", message: "Jev evaluation token budget exhausted." } });
+  const chargeEvaluationTokens = (envelope: JevEvaluationEnvelope): JevEvaluationEnvelope => {
+    if (!envelope.ok) return envelope;
+    const used = envelope.data.usage.inputTokens + envelope.data.usage.outputTokens;
+    if (!Number.isSafeInteger(used) || used < 0 || used > evaluationTokensRemaining) {
+      evaluationTokensRemaining = 0;
+      return tokenBudgetExhausted();
+    }
+    evaluationTokensRemaining -= used;
+    return envelope;
+  };
+  const admitEvaluation = (input: unknown): JevEvaluationEnvelope | undefined => {
+    if (++evaluationAttempts > jevSettings.maxEvaluationsPerScript) {
+      return { ok: false, error: { code: "budget_exhausted", message: "Jev evaluation count budget exhausted." } };
+    }
+    if (evaluationTokensRemaining === 0) return tokenBudgetExhausted();
+    let serialized: string | undefined;
+    try { serialized = JSON.stringify(input); }
+    catch { return { ok: false, error: { code: "invalid_request", message: "Invalid Jev evaluation request." } };
+    }
+    if (serialized === undefined) return { ok: false, error: { code: "invalid_request", message: "Invalid Jev evaluation request." } };
+    const bytes = Buffer.byteLength(serialized, "utf8");
+    if (bytes > jevSettings.maxEvaluationBytesPerScript - evaluationBytes) {
+      return { ok: false, error: { code: "budget_exhausted", message: "Jev evaluation byte budget exhausted." } };
+    }
+    evaluationBytes += bytes;
+    return undefined;
+  };
+  let resolvedJevEvaluator = jevEvaluator;
+  let resolvedSemanticEvaluator = semanticEvaluator;
+  const evaluate = async (input: unknown): Promise<WorkerResultPayload> => {
+    const startedAt = Date.now();
+    const index = calls.push({ operation: "evaluate", ok: false, error: "incomplete", durationMs: 0, startedAt }) - 1;
+    let envelope: JevEvaluationEnvelope;
+    const rejected = admitEvaluation(input);
+    if (rejected) {
+      envelope = rejected;
+    } else {
+      if (!resolvedJevEvaluator) {
+        const client = await import("./jev-client.ts");
+        resolvedJevEvaluator = client.evaluateJev;
+      }
+      envelope = await resolvedJevEvaluator(state, input as JevEvaluateInput, {
+        purpose: "script",
+        ...(callSignal ? { signal: callSignal } : {}),
+        ...(observedSources.size > 0 ? { observedSources: [...observedSources] } : {}),
+      });
+    }
+    envelope = chargeEvaluationTokens(envelope);
+    throwIfAborted(callSignal);
+    if (!reserveIntermediateBytes(JSON.stringify(envelope))) {
+      envelope = { ok: false, error: { code: "budget_exhausted", message: "Jev evaluation exceeds the remaining mcpScript intermediate transfer budget (16 MiB per script)." } };
+    }
+    calls[index] = envelope.ok
+      ? {
+          operation: "evaluate", ok: true, model: envelope.data.model,
+          inputTokens: envelope.data.usage.inputTokens, outputTokens: envelope.data.usage.outputTokens,
+          durationMs: Date.now() - startedAt, startedAt,
+        }
+      : { operation: "evaluate", ok: false, error: envelope.error.code, durationMs: Date.now() - startedAt, startedAt };
+    return { envelope };
+  };
 
-    const searchTools = async (input?: SearchInput) => {
+  const searchTools = async (input?: SearchInput) => {
     const startedAt = Date.now();
     const query = typeof input?.query === "string" ? input.query : "";
     const index = calls.push({ operation: "search", query, ok: false, error: "incomplete", durationMs: 0, startedAt }) - 1;
@@ -256,6 +324,16 @@ export async function runMcpScript(
         server: typeof input?.server === "string" ? input.server : undefined,
         searchMode: input?.searchMode,
         signal: callSignal,
+        semanticEvaluator: async (semanticState, semanticInput, options) => {
+          const rejected = admitEvaluation(semanticInput);
+          if (rejected) return rejected;
+          if (!resolvedSemanticEvaluator) {
+            const client = await import("./jev-client.ts");
+            resolvedSemanticEvaluator = client.evaluateJev;
+          }
+          const envelope = await resolvedSemanticEvaluator(semanticState, semanticInput, options);
+          return chargeEvaluationTokens(envelope);
+        },
         observedSources: [...observedSources],
       });
       if ("error" in outcome) {

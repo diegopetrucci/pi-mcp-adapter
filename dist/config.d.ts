@@ -133,6 +133,16 @@ export declare function translatePiMcpServer(name: string, value: unknown): {
     ignored: string[];
 } | string;
 export declare function writeSharedConfigText(filePath: string, text: string, cwd?: string): void;
+/**
+ * Preview the adapter-owned Jev policy change without writing either the
+ * selected read-only config or a shared/native MCP file.
+ */
+export declare function previewJevSemanticSearchConfig(overridePath: string | undefined, cwd: string, allowedServers: string[], effectiveJev?: unknown): ConfigWritePreview;
+/** Persist Jev settings only in the Pi-owned adapter layer. */
+export declare function writeJevSemanticSearchConfig(overridePath: string | undefined, cwd: string, allowedServers: string[], effectiveJev?: unknown): {
+    path: string;
+    changed: boolean;
+};
 export interface ServerDisabledOverrideResult {
     path: string;
     changed: boolean;

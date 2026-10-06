@@ -272,6 +272,7 @@ export const MCP_PROXY_TOOL_PARAMETERS_SCHEMA = Type.Object({
   connect: Type.Optional(Type.String({ description: "Server name to connect (lazy connect + metadata refresh)" })),
   describe: Type.Optional(Type.String({ description: "Tool name to describe (shows parameters)" })),
   search: Type.Optional(Type.String({ description: "Search tools by name/description" })),
+  searchMode: Type.Optional(Type.String({ enum: ["lexical", "semantic"], description: "Search backend (default: lexical; semantic is available when a System One key is configured)" })),
   regex: Type.Optional(Type.Boolean({ description: "Treat search as regex (default: substring match)" })),
   includeSchemas: Type.Optional(Type.Boolean({ description: "Include parameter schemas in search results (default: true)" })),
   limit: optionalNumberSchema("Maximum number of search results to return (default: 50)", 1) as never,

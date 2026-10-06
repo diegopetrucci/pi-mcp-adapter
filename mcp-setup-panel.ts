@@ -553,7 +553,7 @@ class McpSetupPanelView implements Component {
           ...this.prose(width, preset.summary),
           ...(preset.desktopApp ? [{ text: "" }, ...this.prose(width, preset.desktopApp.enableSteps)] : []),
           ...(preset.desktopApp ? [{ text: "" }, ...this.prose(width, "Always added to the global config because it depends on an app installed on this machine.")] : []),
-          ...this.callbacks.previewKnownServer(preset, preset.desktopApp ? "global" : state.sharedConfigTarget).flatMap(preview => this.writePreview(() => preview, width, errors)),
+          ...this.previewOrError(() => this.callbacks.previewKnownServer(preset, preset.desktopApp ? "global" : state.sharedConfigTarget), width, errors) ?? [],
         ];
       }
       case "add-repoprompt": {
@@ -655,8 +655,12 @@ class McpSetupPanelView implements Component {
     }
   }
 
-  private previewOrError(getPreview: () => ConfigWritePreview | null, width: number, errors: PaneLine[]): PaneLine[] | null {
-    let preview: ConfigWritePreview | null;
+  private previewOrError(
+    getPreview: () => ConfigWritePreview | ConfigWritePreview[] | null,
+    width: number,
+    errors: PaneLine[],
+  ): PaneLine[] | null {
+    let preview: ConfigWritePreview | ConfigWritePreview[] | null;
     try {
       preview = getPreview();
     } catch (error) {
@@ -672,6 +676,7 @@ class McpSetupPanelView implements Component {
       );
       return [];
     }
+    if (Array.isArray(preview)) return preview.flatMap((entry) => this.formatWritePreview(entry));
     return preview ? this.formatWritePreview(preview) : null;
   }
 

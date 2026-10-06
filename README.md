@@ -61,15 +61,15 @@ Stopping a server doesn't take its tools away: the model can still search them, 
 
 The [full comparison](https://github.com/nicobailon/pi-mcp-adapter/blob/main/docs/pi-builtin-comparison.md) has every row with sources, as of Pi 0.99.2.
 
-When you install or update the adapter, it turns Pi's built-in MCP off in Pi's settings for you (the same switch as `pi config` → Built-in), so the two don't both run. If you remove the adapter, turn the built-in back on there ([details](https://github.com/nicobailon/pi-mcp-adapter/blob/main/docs/configuration.md#pis-built-in-mcp)).
+While the built-in is turned on, Pi may warn at startup and `/reload` that it was not loaded. The adapter does not modify Pi's user or project settings; disable the built-in explicitly in `pi config` when both extensions are installed. If you remove the adapter, turn the built-in back on there ([details](https://github.com/nicobailon/pi-mcp-adapter/blob/main/docs/configuration.md#pis-built-in-mcp)).
 
 ## Install
 
 ```bash
-pi install npm:@diegopetrucci/pi-mcp-adapter@2.36.0
+pi install npm:@diegopetrucci/pi-mcp-adapter@5.0.0
 ```
 
-TLH automation should use this exact pinned install target. The upstream `v2.36.0` tag is only the intake anchor; the fork-owned `@diegopetrucci/pi-mcp-adapter@2.36.0` was published to npm through the trusted GitHub Actions OIDC/provenance workflow. This fork's published package exists to support bundled tlh integration rather than serve as a general-purpose standalone release channel.
+TLH automation should use this exact pinned install target. The upstream `v5.0.0` tag is only the intake anchor; the fork-owned package identity and version are `@diegopetrucci/pi-mcp-adapter@5.0.0` for bundled tlh integration. Publication, tagging, and PR integration are separate release steps and are not asserted by this documentation.
 
 Maintainer note: upstream intake policy for this fork lives in `docs/UPSTREAM-SYNC.md`, with fork-only delta tracking in `docs/tlh-patch-inventory.md`.
 
