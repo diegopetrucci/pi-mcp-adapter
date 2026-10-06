@@ -23,6 +23,7 @@ function discovery(imports: Array<{ kind: "cursor"; path: string; serverCount: n
     totalServerCount: 0,
     fingerprint: "test",
     repoPrompt: { configured: false },
+    knownServerPresets: [],
   };
 }
 
@@ -72,7 +73,8 @@ describe("MCP setup write-preview refusals", () => {
     process.chdir(cwd);
 
     const cursorPath = join(home, ".cursor", "mcp.json");
-    const piPath = join(home, ".pi", "agent", "mcp.json");
+    // v5 uses mcp-adapter.json (ADAPTER_CONFIG_NAME); old fork used mcp.json
+    const piPath = join(home, ".pi", "agent", "mcp-adapter.json");
     writeJson(cursorPath, { mcpServers: { cursor: { command: "cursor" } } });
     mkdirSync(dirname(piPath), { recursive: true });
     symlinkSync(cursorPath, piPath);
@@ -92,6 +94,10 @@ describe("MCP setup write-preview refusals", () => {
       () => {},
     );
 
+    // v5: adopt-imports is at index 2 (after two select-shared-target entries);
+    // navigate down twice to reach it before rendering.
+    panel.handleInput("\x1b[B"); // down to Global
+    panel.handleInput("\x1b[B"); // down to adopt-imports
     const output = panel.render(120).join("\n");
     expect(output).toContain("Write refused:");
     expect(output).toContain("No changes will be made.");
@@ -128,16 +134,15 @@ describe("MCP setup write-preview refusals", () => {
       () => {},
     );
 
-    // Select the global target and then its starter action before the first
-    // render that evaluates the write preview.
-    panel.handleInput("\x1b[B");
-    panel.handleInput("\r");
-    panel.handleInput("\x1b[B");
-    panel.handleInput("\x1b[B");
+    // v5: action order is [Project, Global, scaffold, view-example, ...]
+    // Navigate: down to Global, enter to select, then one more down to scaffold.
+    panel.handleInput("\x1b[B"); // down to Global (index 1)
+    panel.handleInput("\r");     // enter — select global target
+    panel.handleInput("\x1b[B"); // down to scaffold (index 2)
     const output = panel.render(120).join("\n");
     expect(output).toContain("Write refused:");
     expect(output).toContain("No changes will be made.");
-    panel.handleInput("\r");
+    panel.handleInput("\r"); // enter on scaffold — should be blocked by write refusal
     expect(scaffoldConfig).not.toHaveBeenCalled();
     expect(lstatSync(sharedPath).isSymbolicLink()).toBe(true);
     panel.dispose();

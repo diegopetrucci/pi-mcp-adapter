@@ -25,6 +25,7 @@ export type McpServerRuntimeStatus =
   | "failed"
   | "needs-auth"
   | "not-connected"
+  | "blocked"
   | "disabled";
 
 export type McpListenState =
@@ -45,6 +46,7 @@ export interface McpServerStatusSnapshot {
   readonly disabled: boolean;
   readonly listenState: McpListenState;
   readonly catalogStale?: boolean;
+  readonly blockedReason?: string;
 }
 
 export interface McpStatusSnapshot {
@@ -54,6 +56,13 @@ export interface McpStatusSnapshot {
   readonly totalResources: number;
   readonly connectedCount: number;
   readonly disabledCount: number;
+}
+
+export type ProjectServerBlockReason = "untrusted" | "approval-required" | "denied";
+
+export interface ProjectServerBlock {
+  reason: ProjectServerBlockReason;
+  source: { path: string };
 }
 
 /**
@@ -89,6 +98,7 @@ export interface McpTool {
   description?: SdkTool["description"];
   inputSchema?: SdkTool["inputSchema"]; // JSON Schema
   outputSchema?: SdkTool["outputSchema"]; // JSON Schema for structuredContent
+  annotations?: SdkTool["annotations"];
   _meta?: SdkTool["_meta"];
 }
 
@@ -193,7 +203,7 @@ export interface UiServerHandle {
   sessionToken: string;
   serverName: string;
   toolName: string;
-  viewer?: "browser" | "glimpse" | "suppressed";
+  viewer?: "browser" | "glimpse" | "orca" | "suppressed";
   windowOpen?: boolean;
   close: (reason?: string) => void;
   sendToolInput: (args: Record<string, unknown>) => void;
@@ -427,6 +437,8 @@ export interface HttpRequestHeadersCommand {
 
 // Server configuration
 export interface ServerEntry {
+  /** Short human summary shown by mcp({ server }) and the /mcp-adapter panel, and ranked by mcp({ search }). */
+  description?: string;
   command?: string;
   args?: string[];
   /** Explicit rmcp-mux Unix-domain socket path. Mutually exclusive with command and url. */
@@ -447,9 +459,10 @@ export interface ServerEntry {
    * - 'oauth' - Use OAuth 2.1 (auto-discovers endpoints, supports dynamic client registration)
    * - 'bearer' - Use static Bearer token
    * - false - Disable authentication
+   * - { provider } - Send the token of a Pi provider (`/login <provider>`) on every request; user-global config only
    * If not specified and url is present, OAuth will be auto-detected unless custom headers are configured
    */
-  auth?: "oauth" | "bearer" | false;
+  auth?: "oauth" | "bearer" | false | { provider: string };
   bearerToken?: string;
   bearerTokenEnv?: string;
   /** Read a static bearer token from the adapter-owned OS credential store. */
@@ -480,7 +493,7 @@ export interface ServerEntry {
    */
   searchKeywords?: Record<string, string[]>;
   // Require interactive approval before calling matching MCP tools/resources.
-  approveTools?: boolean | string[];
+  approveTools?: boolean | "destructive" | string[];
   // Debug
   debug?: boolean;  // Show server stderr (default: false)
   /** Enable metadata-only JSONL protocol tracing for this server. */
@@ -587,6 +600,8 @@ export interface McpToolApprovalRequest {
 }
 
 export interface McpSettings {
+  /** Admission policy for unapproved project-local MCP servers. Only user-global config may set this. */
+  projectServers?: "ask" | "allow";
   toolPrefix?: ToolPrefix;
   /** Show the plug prefix in MCP status and connection text (default: true). Set to false to disable it. */
   showStatusIcon?: boolean;
@@ -602,6 +617,8 @@ export interface McpSettings {
   agentPluginPaths?: string[];
   idleTimeout?: number; // minutes, default 10, 0 to disable
   requestTimeoutMs?: number; // milliseconds, overrides the SDK request timeout when > 0
+  /** Defer lazy runtime startup even when persisted metadata is missing or invalid. Defaults to false. */
+  deferWithMissingMetadata?: boolean;
   directTools?: boolean | "search";
   /** Register per-server mcp__<server> namespace proxies. Defaults to false. */
   namespaceProxyTools?: boolean;
@@ -617,14 +634,18 @@ export interface McpSettings {
   directToolResultDetails?: "lean" | "bounded";
   /** Show the advisory when 75 or more direct tools resolve. Defaults to true. */
   warnOnLargeDirectTools?: boolean;
-  /** Register the trusted MCP-only JavaScript scripting tool. Defaults to false; set true to opt in. */
+  /** Register the MCP-only JavaScript scripting tool and its manual skill. Defaults to false. */
   scriptMode?: boolean;
+  /** `"model"` points the model at the mcp-scripting skill from the mcpScript description. Defaults to `"manual"`: `/skill:mcp-scripting` only. */
+  scriptSkill?: "manual" | "model";
+  /** Expose MCP resources as tools (default: true). Set to false to disable globally across all servers. */
+  exposeResources?: boolean;
   /** Render MCP tool results as compact self-rendered rows by default, or as the legacy boxed row. */
   toolResultRendering?: "compact" | "boxed";
   /** Number of result text lines to show before expansion. Supports 1, 2, or 3. Defaults to 1 in compact mode and 3 in boxed mode. */
   collapsedResultLines?: 1 | 2 | 3;
   /** Default approval gate for matching tools/resources; per-server settings override it. */
-  approveTools?: boolean | string[];
+  approveTools?: boolean | "destructive" | string[];
   disableProxyTool?: boolean;
   /** Freeze direct-tool registration after the initial sync. Automatic metadata updates
    * and explicit reconnects won't rebuild the system prompt, preserving the
@@ -702,6 +723,16 @@ export interface ToolMetadata {
   inputSchema?: unknown;  // JSON Schema for parameters (stored for describe/errors)
   outputSchema?: unknown; // Server schema for structuredContent (stored for describe)
   uiStreamMode?: UiStreamMode;
+  annotations?: McpToolAnnotations;
+}
+
+/** Behavior hints a server declared on a tool. Hints, not guarantees. */
+export interface McpToolAnnotations {
+  title?: string;
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint?: boolean;
 }
 
 export interface PromptMetadata {
@@ -714,7 +745,7 @@ export interface PromptMetadata {
 }
 
 export interface DirectToolSpec {
-  /** Registered inactive; `mcp({ search })` activates it (directTools: "search"). */
+  /** Registered inactive; `mcp({ search })` or a successful `mcp({ tool })` call activates it (directTools: "search"). */
   lazy?: boolean;
   serverName: string;
   originalName: string;
@@ -730,6 +761,8 @@ export interface ServerProvenance {
   path: string;
   kind: "user" | "project" | "import";
   importKind?: string;
+  /** Settings from Pi's `mcp.json` that the adapter could not translate for this server. */
+  ignoredSettings?: string[];
 }
 
 export interface McpAuthResult {
@@ -745,6 +778,7 @@ export interface CachedTool {
   uiResourceUri?: string;
   uiVisibility?: UiToolVisibility[];
   uiStreamMode?: "eager" | "stream-first";
+  annotations?: McpToolAnnotations;
 }
 
 export interface CachedResource {
@@ -769,6 +803,13 @@ export interface ServerCacheEntry {
   /** Server-level hints from the aggregated tools/list result. */
   ttlMs?: ListToolsResult["ttlMs"];
   cacheScope?: ListToolsResult["cacheScope"];
+  /**
+   * Result shapes (field names and types, never values) seen from tools without an outputSchema,
+   * keyed by original tool name. Dropped when the server config or that tool's description or input schema changes.
+   */
+  outputShapes?: Record<string, { source: "structuredContent" | "jsonText"; shape: unknown }>;
+  /** Startup discovery failed for this config; the entry has no catalog. */
+  discoveryFailed?: true;
   cachedAt: number;
 }
 
@@ -781,9 +822,11 @@ export interface McpPanelCallbacks {
   reconnect: (serverName: string) => Promise<boolean>;
   canAuthenticate: (serverName: string) => boolean;
   authenticate: (serverName: string) => Promise<McpAuthResult>;
-  getConnectionStatus: (serverName: string) => "connected" | "idle" | "failed" | "needs-auth" | "disabled";
+  getConnectionStatus: (serverName: string) => "connected" | "idle" | "failed" | "needs-auth" | "blocked" | "disabled";
   getFailureMessage?: (serverName: string) => string | null;
   refreshCacheAfterReconnect: (serverName: string) => ServerCacheEntry | null;
+  /** Present when Pi's built-in MCP has sign-ins the adapter can import. */
+  importPiSignIns?: () => { imported: string[]; failed: { server: string; error: string }[] };
 }
 
 export interface McpPanelResult {

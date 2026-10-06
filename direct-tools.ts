@@ -1,20 +1,24 @@
 import type { AgentToolResult, AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { UrlElicitationRequiredError, type Client } from "@modelcontextprotocol/client";
 import type { McpExtensionState } from "./state.ts";
+import { disabledServerReason } from "./project-server-trust.ts";
 import type { DirectToolSpec, McpContent } from "./types.ts";
-import { lazyConnect, getFailureAgeSeconds, clearFailure } from "./init.ts";
+import { lazyConnect, clearFailure } from "./init.ts";
+import { describeFailure } from "./failure-backoff.ts";
 import { abortable, throwIfAborted } from "./abort.ts";
 import { formatSchema } from "./tool-metadata.ts";
 import { resolveMcpResultContent, transformMcpResourceContents } from "./tool-registrar.ts";
-import { guardMcpOutput, guardedMcpDetails, resolveMcpOutputGuardOptions } from "./mcp-output-guard.ts";
+import { guardMcpOutput, guardedMcpDetails, resolveMcpOutputGuardOptions, scriptPipeHint } from "./mcp-output-guard.ts";
 import { maybeStartUiSession, summarizeUiSessionResult, type UiSessionRuntime } from "./ui-session.ts";
 import { isServerDisabled } from "./types.ts";
 import { authenticate, supportsOAuth } from "./mcp-auth-flow.ts";
-import { formatAuthRequiredMessage, normalizeToolArguments, resolveServerUrl } from "./utils.ts";
+import { formatAuthRequiredMessage, normalizeToolArguments, resolveServerUrl, withToolCallIdMeta } from "./utils.ts";
 import { SessionRecoveryAuthRequiredError, withSessionRecovery } from "./session-recovery.ts";
 import { combineAbortSignals, isAbortError } from "./runtime-owner.ts";
 import { callToolViaTaskSession } from "./mcp-tasks.ts";
-import { ensureToolCallApproved } from "./tool-approval.ts";
+import { callToolPausingForElicitation } from "./elicitation-handler.ts";
+import { observedOutputRecorder } from "./output-shape.ts";
+import { ensureToolCallApproved, type ToolCallApprovalResult } from "./tool-approval.ts";
 import { getInputRequiredNeedsUiDetails } from "./errors.ts";
 
 type ClientCallToolResult = Awaited<ReturnType<Client["callTool"]>>;
@@ -125,9 +129,14 @@ type DirectToolExecute = (
 export function createDirectToolExecutor(
   getState: () => McpExtensionState | null,
   getInitPromise: () => Promise<McpExtensionState> | null,
-  spec: DirectToolSpec
+  spec: DirectToolSpec,
+  // Deferred tools (Pi 0.99+) keep the server's structuredContent.
+  structured = false,
 ): DirectToolExecute {
-  return async function execute(_toolCallId, params, signal) {
+  const structuredContentOf = (result: ClientCallToolResult) => structured && result.structuredContent !== undefined
+    ? { structuredContent: result.structuredContent as NonNullable<AgentToolResult["structuredContent"]> }
+    : {};
+  return async function execute(toolCallId, params, signal) {
     throwIfAborted(signal);
     let state = getState();
     const initPromise = getInitPromise();
@@ -153,7 +162,7 @@ export function createDirectToolExecutor(
 
     const definition = state.config.mcpServers[spec.serverName];
     if (isServerDisabled(definition)) {
-      const message = `MCP server "${spec.serverName}" is disabled. Run /mcp enable ${spec.serverName} and /reload to enable it.`;
+      const message = `MCP server "${spec.serverName}" is ${disabledServerReason(state.blockedProjectServers, spec.serverName)}`;
       return {
         content: [{ type: "text" as const, text: message }],
         details: { error: "server_disabled", server: spec.serverName, message },
@@ -190,9 +199,9 @@ export function createDirectToolExecutor(
           details: { error: "auth_required", server: spec.serverName, message, autoAuthAttempted },
         };
       }
-      const failedAgo = getFailureAgeSeconds(state, spec.serverName);
+      const failure = describeFailure(state, spec.serverName);
       return {
-        content: [{ type: "text" as const, text: `MCP server "${spec.serverName}" not available${failedAgo !== null ? ` (failed ${failedAgo}s ago)` : ""}` }],
+        content: [{ type: "text" as const, text: `MCP server "${spec.serverName}" not available${failure !== null ? ` (${failure})` : ""}` }],
         details: { error: "server_unavailable", server: spec.serverName },
       };
     }
@@ -206,29 +215,10 @@ export function createDirectToolExecutor(
     }
 
     const normalizedParams = spec.resourceUri ? params : normalizeToolArguments(params);
-    const approval = await ensureToolCallApproved(state, spec.serverName, {
-      name: spec.prefixedName,
-      originalName: spec.originalName,
-      description: spec.description,
-      ...(spec.inputSchema !== undefined ? { inputSchema: spec.inputSchema } : {}),
-      ...(spec.resourceUri !== undefined ? { resourceUri: spec.resourceUri } : {}),
-      ...(spec.uiResourceUri !== undefined ? { uiResourceUri: spec.uiResourceUri } : {}),
-      ...(spec.uiStreamMode !== undefined ? { uiStreamMode: spec.uiStreamMode } : {}),
-    }, normalizedParams, ownedSignal, spec.resourceUri ? "resource" : "direct");
-    if (approval.ok === false) {
-      const denied = approval.reason === "denied";
-      const message = denied
-        ? `The user declined approval to run MCP tool "${spec.originalName}" on server "${spec.serverName}".`
-        : `MCP tool "${spec.originalName}" on server "${spec.serverName}" is approval-gated and requires an interactive session.`;
-      return {
-        content: [{ type: "text" as const, text: message }],
-        details: {
-          error: denied ? "approval_denied" : "approval_required",
-          server: spec.serverName,
-          tool: spec.originalName,
-        },
-      };
-    }
+    // The spec is fixed at registration; approval must see the hints the server advertises now.
+    const annotations = spec.resourceUri
+      ? undefined
+      : state.toolMetadata.get(spec.serverName)?.find(tool => !tool.resourceUri && tool.originalName === spec.originalName)?.annotations;
 
     let uiSession: UiSessionRuntime | null = null;
     const requestOptions = state.manager.getRequestOptions?.(spec.serverName, ownedSignal) ?? (ownedSignal ? { signal: ownedSignal } : undefined);
@@ -258,9 +248,35 @@ export function createDirectToolExecutor(
       return state.manager.getConnection(spec.serverName);
     };
 
+    let approval: ToolCallApprovalResult | undefined;
     try {
+      // In flight from here so an idle check cannot close the server while the approval dialog is open.
       state.manager.touch(spec.serverName);
       state.manager.incrementInFlight(spec.serverName);
+      approval = await ensureToolCallApproved(state, spec.serverName, {
+        name: spec.prefixedName,
+        originalName: spec.originalName,
+        description: spec.description,
+        ...(spec.inputSchema !== undefined ? { inputSchema: spec.inputSchema } : {}),
+        ...(spec.resourceUri !== undefined ? { resourceUri: spec.resourceUri } : {}),
+        ...(spec.uiResourceUri !== undefined ? { uiResourceUri: spec.uiResourceUri } : {}),
+        ...(spec.uiStreamMode !== undefined ? { uiStreamMode: spec.uiStreamMode } : {}),
+        ...(annotations !== undefined ? { annotations } : {}),
+      }, normalizedParams, ownedSignal, spec.resourceUri ? "resource" : "direct");
+      if (approval.ok === false) {
+        const denied = approval.reason === "denied";
+        const message = denied
+          ? `The user declined approval to run MCP tool "${spec.originalName}" on server "${spec.serverName}".`
+          : `MCP tool "${spec.originalName}" on server "${spec.serverName}" is approval-gated and requires an interactive session.`;
+        return {
+          content: [{ type: "text" as const, text: message }],
+          details: {
+            error: denied ? "approval_denied" : "approval_required",
+            server: spec.serverName,
+            tool: spec.originalName,
+          },
+        };
+      }
 
       if (spec.resourceUri) {
         const result = await withSessionRecovery<ClientReadResourceResult>(
@@ -306,6 +322,8 @@ export function createDirectToolExecutor(
           })
         : null;
 
+      const requestMeta = withToolCallIdMeta(uiSession?.requestMeta, toolCallId);
+      const recordOutput = observedOutputRecorder(state, spec.serverName, spec.originalName);
       const result = await withSessionRecovery<ClientCallToolResult>(
         {
           manager: state.manager,
@@ -320,19 +338,20 @@ export function createDirectToolExecutor(
             return await callToolViaTaskSession(conn.taskSession, {
               name: spec.originalName,
               args: normalizedParams ?? {},
-              meta: uiSession?.requestMeta,
+              meta: requestMeta,
               signal: ownedSignal,
               requestTimeoutMs: requestOptions?.timeout,
             }) as unknown as ClientCallToolResult;
           }
-          return abortable(conn.client.callTool({
+          return abortable(callToolPausingForElicitation(conn.client, {
             name: spec.originalName,
             arguments: normalizedParams,
-            _meta: uiSession?.requestMeta,
+            _meta: requestMeta,
           }, requestOptions), ownedSignal);
         },
       );
       uiSession?.sendToolResult(result as unknown as import("@modelcontextprotocol/client").CallToolResult);
+      if (!result.isError) recordOutput(result as Record<string, unknown>);
 
       if (result.isError) {
         const content = resolveMcpResultContent(result as Record<string, unknown>, state.owner?.signal);
@@ -346,6 +365,7 @@ export function createDirectToolExecutor(
         return {
           content: guarded.content,
           details: { error: "tool_error", server: spec.serverName, ...guardedMcpDetails(guarded) },
+          ...structuredContentOf(result),
         };
       }
 
@@ -368,18 +388,23 @@ export function createDirectToolExecutor(
             uiUrl: uiSummary.uiUrl,
             ...guardedMcpDetails(guarded),
           },
+          ...structuredContentOf(result),
         };
       }
 
       const guarded = await guardMcpOutput(outputContent, {
         ...outputGuardOptions,
+        ...scriptPipeHint(state.scriptTool, outputContent),
         ...(state.config.settings?.directToolResultDetails === "bounded" ? { rawMcpResult: result } : {}),
       });
       return {
         content: guarded.content,
         details: { server: spec.serverName, tool: spec.originalName, ...guardedMcpDetails(guarded) },
+        ...structuredContentOf(result),
       };
     } catch (error) {
+      // Approval errors, such as an abort while the dialog is open, propagate unchanged.
+      if (!approval) throw error;
       if (error instanceof SessionRecoveryAuthRequiredError) {
         const message = error.authMessage ?? getDirectAuthRequiredMessage(state, spec.serverName);
         uiSession?.sendToolCancelled(message);

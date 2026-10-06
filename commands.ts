@@ -1,27 +1,33 @@
 import { existsSync, readFileSync } from "node:fs";
+import { createConnection } from "node:net";
+import { isDeepStrictEqual } from "node:util";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { OverlayHandle } from "@earendil-works/pi-tui";
 import type { McpExtensionState } from "./state.ts";
-import { isServerDisabled, type McpAuthResult, type McpConfig, type McpPanelCallbacks, type McpPanelResult, type ImportKind, type ServerProvenance } from "./types.ts";
+import { isServerDisabled, type McpAuthResult, type McpConfig, type McpPanelCallbacks, type McpPanelResult, type ImportKind } from "./types.ts";
 import {
   ensureCompatibilityImports,
   getSharedConfigPath,
-  getPiOwnedGlobalConfigPath,
-  getProjectPiConfigPath,
   getMcpDiscoverySummary,
   getMcpStandardConfigSummary,
   type KnownServerPreset,
   type SharedConfigTarget,
   getServerProvenance,
+  loadMcpConfig,
   previewCompatibilityImports,
-  previewDirectToolsConfig,
   previewSharedServerEntry,
+  previewPiAdapterServerEntry,
   previewStarterSharedConfig,
+  splitSharedAndAdapterEntry,
   writeDirectToolsConfig,
   writeProjectServerDisabledOverride,
   writeSharedServerEntry,
+  writePiAdapterServerEntry,
   writeSharedConfigText,
   writeStarterSharedConfig,
+  getPiGlobalConfigPath,
+  getProjectPiConfigPath,
+  type ConfigWritePreview,
 } from "./config.ts";
 import { markKeepAliveAfterConnect, notifyToolMetadataUpdated, updateMetadataCache, updateStatusBar, getFailureAgeSeconds, getFailureMessage, clearFailure, recordFailure } from "./init.ts";
 import { isServerInActiveFailureBackoff } from "./failure-backoff.ts";
@@ -31,8 +37,10 @@ import { supportsOAuth, authenticate, removeAuth, type McpOAuthRuntime } from ".
 import { getAuthStorageOptions, inspectAuthForUrl } from "./mcp-auth.ts";
 import { inspectBearerTokenForUrl, removeBearerToken } from "./mcp-bearer-store.ts";
 import { loadOnboardingState, markSetupCompleted as persistSetupCompleted, markSharedConfigHintShown } from "./onboarding-state.ts";
-import { formatTerminalError, openPath, resolveServerUrl, sanitizeTerminalText } from "./utils.ts";
+import { findPiSignInImports, importPiSignIn } from "./pi-signin-import.ts";
+import { formatTerminalError, openPath, providerSignInMessage, resolveServerUrl, sanitizeTerminalText } from "./utils.ts";
 import { isAbortError } from "./runtime-owner.ts";
+import { describeProjectServerBlock } from "./project-server-trust.ts";
 
 function terminalHyperlink(label: string, url: string): string {
   return `\u001B]8;;${sanitizeTerminalText(url)}\u001B\\${sanitizeTerminalText(label)}\u001B]8;;\u001B\\`;
@@ -51,38 +59,6 @@ function canRenderPanel(ctx: ExtensionContext): boolean {
   return ctx.hasUI && ctx.mode === "tui";
 }
 
-function sharedSetupEntry(entry: KnownServerPreset["entry"]): KnownServerPreset["entry"] {
-  const sharedEntry = { ...entry };
-  delete sharedEntry.directTools;
-  return sharedEntry;
-}
-
-function getSetupAdapterProvenance(
-  serverName: string,
-  entry: KnownServerPreset["entry"],
-  target: SharedConfigTarget,
-  cwd: string,
-): { changes: Map<string, true | string[] | false>; provenance: Map<string, ServerProvenance> } | null {
-  const directTools = entry.directTools;
-  if (directTools === undefined || directTools === "search") return null;
-  const path = target === "project" ? getProjectPiConfigPath(cwd) : getPiOwnedGlobalConfigPath(undefined, cwd);
-  return {
-    changes: new Map([[serverName, directTools]]),
-    provenance: new Map([[serverName, { path, kind: target === "project" ? "project" : "user" }]]),
-  };
-}
-
-function writeSetupAdapterOverride(
-  serverName: string,
-  entry: KnownServerPreset["entry"],
-  target: SharedConfigTarget,
-  cwd: string,
-): void {
-  const setup = getSetupAdapterProvenance(serverName, entry, target, cwd);
-  if (!setup) return;
-  writeDirectToolsConfig(setup.changes, setup.provenance, { mcpServers: {} }, cwd);
-}
-
 export async function editSharedConfig(ctx: ExtensionContext, target: SharedConfigTarget): Promise<boolean> {
   if (!ctx.hasUI) return false;
   const path = getSharedConfigPath(target, ctx.cwd);
@@ -98,22 +74,31 @@ export async function editSharedConfig(ctx: ExtensionContext, target: SharedConf
   return true;
 }
 
+
 export async function showStatus(state: McpExtensionState, ctx: ExtensionContext): Promise<void> {
   if (!ctx.hasUI) return;
 
   const lines: string[] = ["MCP Server Status:", ""];
+  if (state.migrationNotices?.length) {
+    lines.push(...state.migrationNotices.map((notice) => `⚠ ${notice}`), "");
+  }
   if (!state.programmaticConfig) {
     lines.push(
       "Shared MCP config: .mcp.json for this project/team or ~/.config/mcp/mcp.json for all projects.",
-      "Pi-owned files hold compatibility imports and adapter-specific overrides.",
+      "mcp-adapter.json files hold compatibility imports and adapter-specific overrides; Pi's mcp.json files are reserved for Pi and ignored.",
       "",
     );
   }
 
   for (const name of Object.keys(state.config.mcpServers)) {
     const definition = state.config.mcpServers[name];
+    const block = state.blockedProjectServers?.get(name);
+    if (block) {
+      lines.push(`⊘ ${name}: ${describeProjectServerBlock(block.reason)}`);
+      continue;
+    }
     if (isServerDisabled(definition)) {
-      lines.push(`⊘ ${name}: disabled (run /mcp enable ${name}, then /reload)`);
+      lines.push(`⊘ ${name}: disabled (run /mcp-adapter enable ${name}, then /reload)`);
       continue;
     }
     const connection = state.manager.getConnection(name);
@@ -159,7 +144,7 @@ export async function showStatus(state: McpExtensionState, ctx: ExtensionContext
 
   if (Object.keys(state.config.mcpServers).length === 0) {
     lines.push("No MCP servers configured");
-    lines.push("Run /mcp setup to add a server to .mcp.json or ~/.config/mcp/mcp.json");
+    lines.push("Run /mcp-adapter setup to add a server to .mcp.json or ~/.config/mcp/mcp.json");
   }
 
   ctx.ui.notify(lines.join("\n"), "info");
@@ -241,7 +226,7 @@ export async function reconnectServer(
     return false;
   }
   if (isServerDisabled(definition)) {
-    if (ui) ui.notify(`MCP: ${name} is disabled. Run /mcp enable ${name}, then /reload.`, "warning");
+    if (ui) ui.notify(`MCP: ${name} is disabled. Run /mcp-adapter enable ${name}, then /reload.`, "warning");
     return false;
   }
 
@@ -254,7 +239,9 @@ export async function reconnectServer(
     state.owner?.throwIfInactive();
     if (connection.status === "needs-auth") {
       if (ui) {
-        ui.notify(`MCP: ${name} requires OAuth. Run /mcp-auth ${name} first.`, "warning");
+        ui.notify(typeof definition.auth === "object"
+          ? `MCP: ${providerSignInMessage(name, definition.auth.provider)}`
+          : `MCP: ${name} requires OAuth. Run /mcp-auth ${name} first.`, "warning");
       }
       updateStatusBar(state);
       return false;
@@ -339,11 +326,16 @@ export async function authenticateServer(
     return { ok: false, message };
   }
   if (isServerDisabled(definition)) {
-    const message = `Server "${serverName}" is disabled. Run /mcp enable ${serverName}, then /reload.`;
+    const message = `Server "${serverName}" is disabled. Run /mcp-adapter enable ${serverName}, then /reload.`;
     ui.notify(message, "warning");
     return { ok: false, message };
   }
 
+  if (typeof definition.auth === "object") {
+    const message = providerSignInMessage(serverName, definition.auth.provider);
+    ui.notify(message, "info");
+    return { ok: false, message };
+  }
   if (!supportsOAuth(definition)) {
     const message = `Server "${serverName}" does not use OAuth authentication. Set "auth": "oauth" or omit auth for auto-detection.`;
     ui.notify(
@@ -453,7 +445,7 @@ function validateBearerTokenStoreServer(
   const safeName = sanitizeTerminalText(serverName);
   const definition = state.config.mcpServers[serverName];
   if (!definition) return { ok: false, message: `Server "${safeName}" not found in config`, type: "error" };
-  if (isServerDisabled(definition)) return { ok: false, message: `Server "${safeName}" is disabled. Run /mcp enable ${safeName}, then /reload.`, type: "warning" };
+  if (isServerDisabled(definition)) return { ok: false, message: `Server "${safeName}" is disabled. Run /mcp-adapter enable ${safeName}, then /reload.`, type: "warning" };
   if (definition.auth !== "bearer" || definition.bearerTokenStore !== true) {
     return { ok: false, message: `Server "${safeName}" is not configured for bearerTokenStore.`, type: "error" };
   }
@@ -533,10 +525,25 @@ function buildSharedConfigNoticeLines(configOverridePath: string | undefined, cw
   return {
     lines: [
       `Using standard MCP config from ${sourceList}.`,
-      "Use .mcp.json for project/team config or ~/.config/mcp/mcp.json for all projects. Pi only writes compatibility imports and adapter-specific overrides into Pi-owned files when needed.",
+      "Use .mcp.json for project/team config or ~/.config/mcp/mcp.json for all projects. The adapter writes compatibility imports and adapter-specific overrides into mcp-adapter.json files when needed.",
     ],
     fingerprint: discovery.fingerprint,
   };
+}
+
+// Any accepted TCP connection counts as reachable; failures resolve false so the add still succeeds.
+function isLocalServerReachable(url: string, timeoutMs = 1_500): Promise<boolean> {
+  const { hostname, port } = new URL(url);
+  return new Promise((resolve) => {
+    const socket = createConnection({ host: hostname, port: Number(port) });
+    const finish = (reachable: boolean) => {
+      socket.destroy();
+      resolve(reachable);
+    };
+    socket.setTimeout(timeoutMs, () => finish(false));
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+  });
 }
 
 export async function openMcpSetup(
@@ -549,7 +556,7 @@ export async function openMcpSetup(
 ): Promise<PanelFlowResult> {
   if (!ctx.hasUI) return { configChanged: false };
   if (!canRenderPanel(ctx)) {
-    ctx.ui.notify(`The interactive MCP setup panel is only available in the terminal UI (current mode: ${ctx.mode}). Edit .mcp.json directly, or run /mcp status to review servers.`, "info");
+    ctx.ui.notify(`The interactive MCP setup panel is only available in the terminal UI (current mode: ${ctx.mode}). Edit .mcp.json directly, or run /mcp-adapter status to review servers.`, "info");
     return { configChanged: false };
   }
   if (state.programmaticConfig) {
@@ -570,10 +577,12 @@ export async function openMcpSetup(
       if (!repoPrompt.entry || !repoPrompt.targetPath || !repoPrompt.serverName) return null;
       return previewSharedServerEntry(getSharedConfigPath(target, ctx.cwd), repoPrompt.serverName, repoPrompt.entry, ctx.cwd, target);
     },
-    previewKnownServer: (preset: KnownServerPreset, target: SharedConfigTarget) => {
-      const previews = [previewSharedServerEntry(getSharedConfigPath(target, ctx.cwd), preset.id, sharedSetupEntry(preset.entry), ctx.cwd, target)];
-      const setup = getSetupAdapterProvenance(preset.id, preset.entry, target, ctx.cwd);
-      if (setup) previews.push(...previewDirectToolsConfig(setup.changes, setup.provenance, ctx.cwd));
+    previewKnownServer: (preset: KnownServerPreset, target: SharedConfigTarget): ConfigWritePreview[] => {
+      const sharedConfigPath = getSharedConfigPath(target, ctx.cwd);
+      const piMcpPath = target === "project" ? getProjectPiConfigPath(ctx.cwd) : getPiGlobalConfigPath(undefined, ctx.cwd);
+      const [, adapterEntry] = splitSharedAndAdapterEntry(preset.entry);
+      const previews: ConfigWritePreview[] = [previewSharedServerEntry(sharedConfigPath, preset.id, preset.entry, ctx.cwd, target)];
+      if (adapterEntry) previews.push(previewPiAdapterServerEntry(piMcpPath, preset.id, adapterEntry, ctx.cwd));
       return previews;
     },
     adoptImports: async (imports: ImportKind[]) => {
@@ -596,17 +605,24 @@ export async function openMcpSetup(
       return { path, serverName: repoPrompt.serverName };
     },
     addKnownServer: async (preset: KnownServerPreset, target: SharedConfigTarget) => {
-      const sharedPath = getSharedConfigPath(target, ctx.cwd);
-      const sharedEntry = sharedSetupEntry(preset.entry);
-      const setup = getSetupAdapterProvenance(preset.id, preset.entry, target, ctx.cwd);
-      // Revalidate every destination before the first mutation so a refusal in
-      // the Pi adapter layer cannot leave a partial shared-config write behind.
-      previewSharedServerEntry(sharedPath, preset.id, sharedEntry, ctx.cwd, target);
-      if (setup) previewDirectToolsConfig(setup.changes, setup.provenance, ctx.cwd);
-      const path = writeSharedServerEntry(sharedPath, preset.id, sharedEntry, ctx.cwd, target);
-      if (setup) writeSetupAdapterOverride(preset.id, preset.entry, target, ctx.cwd);
+      const sharedConfigPath = getSharedConfigPath(target, ctx.cwd);
+      const [, adapterEntry] = splitSharedAndAdapterEntry(preset.entry);
+      const path = writeSharedServerEntry(sharedConfigPath, preset.id, preset.entry, ctx.cwd, target);
+      if (adapterEntry) {
+        const piMcpPath = target === "project" ? getProjectPiConfigPath(ctx.cwd) : getPiGlobalConfigPath(undefined, ctx.cwd);
+        writePiAdapterServerEntry(piMcpPath, preset.id, adapterEntry, ctx.cwd);
+      }
       configChanged = true;
-      return { path, serverName: preset.name };
+      // Merging is per field, so the entry is in effect when every preset field survives it and nothing disables it.
+      const active = loadMcpConfig(configOverridePath, ctx.cwd).mcpServers[preset.id];
+      const ignoredBecause = !active
+        ? `the current config mode doesn't read ${path}`
+        : Object.entries(preset.entry).some(([field, value]) => !isDeepStrictEqual(active[field as keyof typeof active], value))
+          ? `another config file also defines ${preset.id} and takes precedence`
+          : isServerDisabled(active) ? `another config file disables ${preset.id}` : undefined;
+      const result = { path, serverName: preset.name, ...(ignoredBecause ? { ignoredBecause } : {}) };
+      if (!preset.desktopApp) return result;
+      return { ...result, reachable: await isLocalServerReachable(preset.entry.url!) };
     },
     openPath: async (targetPath: string) => {
       await openPath(pi, targetPath);
@@ -624,7 +640,8 @@ export async function openMcpSetup(
           resolve({ configChanged });
         });
       },
-      { overlay: true, overlayOptions: { anchor: "center", width: 92 } },
+      // The panel sizes its height from tui.terminal.rows minus this margin, so it always fits.
+      { overlay: true, overlayOptions: { anchor: "center", width: 92, maxHeight: "100%", margin: { top: 1, bottom: 1 } } },
     );
   });
 }
@@ -659,6 +676,7 @@ function buildMcpPanelCallbacks(
     getConnectionStatus: (serverName: string) => {
       authStatusFailures.delete(serverName);
       const definition = config.mcpServers[serverName];
+      if (state.blockedProjectServers?.has(serverName)) return "blocked";
       if (isServerDisabled(definition)) return "disabled";
       const connection = state.manager.getConnection(serverName);
       let serverUrl: string | undefined;
@@ -687,7 +705,8 @@ function buildMcpPanelCallbacks(
       if (getFailureAgeSeconds(state, serverName) !== null) return "failed";
       return "idle";
     },
-    getFailureMessage: (serverName: string) => authStatusFailures.get(serverName) ?? getFailureMessage(state, serverName),
+    getFailureMessage: (serverName: string) => state.blockedProjectServers?.get(serverName)?.reason
+      ?? authStatusFailures.get(serverName) ?? getFailureMessage(state, serverName),
     refreshCacheAfterReconnect: (serverName: string) => {
       const freshCache = loadMetadataCache();
       return freshCache?.servers?.[serverName] ?? null;
@@ -729,11 +748,27 @@ export async function openMcpPanel(
 
   const { createMcpPanel } = await import("./mcp-panel.ts");
   let configChanged = false;
+  const authStorageOptions = state.authStorageOptions ?? {};
+  if (findPiSignInImports(config, authStorageOptions).length > 0) {
+    callbacks.importPiSignIns = () => {
+      const imported: string[] = [];
+      const failed: { server: string; error: string }[] = [];
+      for (const candidate of findPiSignInImports(config, authStorageOptions)) {
+        try {
+          if (importPiSignIn(candidate, authStorageOptions)) imported.push(candidate.serverName);
+        } catch (error) {
+          failed.push({ server: candidate.serverName, error: error instanceof Error ? error.message : String(error) });
+        }
+      }
+      return { imported, failed };
+    };
+  }
 
   await new Promise<void>((resolve) => {
     ctx.ui.custom(
       (tui, theme, keybindings, done) => {
         return createMcpPanel(config, cache, provenanceMap, callbacks, tui, (result: McpPanelResult) => {
+          let directToolsFileWritten = false;
           void (async () => {
             if (!result.cancelled && result.disabledChanges.size > 0) {
               for (const [serverName, disabled] of result.disabledChanges) {
@@ -748,21 +783,24 @@ export async function openMcpPanel(
               }
             }
             if (!result.cancelled && result.changes.size > 0) {
-              // Runtime-registered servers have no persisted provenance. The
-              // write layer intentionally skips them; do not refresh their
-              // proxy-only in-memory entries as if the panel had persisted a
-              // directTools override.
+              // TLH fork: runtime-registered servers have no persisted provenance.
+              // Filter to persisted changes only so proxy-only in-memory entries
+              // are not refreshed as if the panel had persisted a directTools override.
               const persistedChanges = new Map(
                 [...result.changes].filter(([serverName]) => provenanceMap.has(serverName)),
               );
               try {
-                // Validate all targets before writing so an aliased destination
-                // cannot produce a partial multi-file update.
-                previewDirectToolsConfig(result.changes, provenanceMap, ctx.cwd);
-                writeDirectToolsConfig(result.changes, provenanceMap, config, ctx.cwd);
+                writeDirectToolsConfig(persistedChanges, provenanceMap, config, () => {
+                  directToolsFileWritten = true;
+                }, ctx.cwd);
               } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
-                ctx.ui.notify(`Failed to update direct tools: ${message}`, "error");
+                if (directToolsFileWritten) {
+                  ctx.ui.notify(`Direct tools were partially saved before another write failed: ${message}`, "error");
+                  configChanged = true;
+                } else {
+                  ctx.ui.notify(`Failed to save direct tools: ${message}`, "error");
+                }
                 done(undefined);
                 resolve();
                 return;

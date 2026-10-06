@@ -34,8 +34,8 @@ const packageLock = JSON.parse(readFileSync(join(repoRoot, "package-lock.json"),
 };
 
 const hostPeerPackages = {
-  "@earendil-works/pi-ai": { peer: "^0.84.1 || ^0.85.0 || ^0.86.0", dev: "0.86.0" },
-  "@earendil-works/pi-tui": { peer: "*", dev: "0.86.0" },
+  "@earendil-works/pi-ai": { peer: "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0 || ^0.99.0", dev: "0.99.1" },
+  "@earendil-works/pi-tui": { peer: "*", dev: "0.99.1" },
   "typebox": { peer: "*", dev: "1.3.3" },
 };
 const readme = readFileSync(join(repoRoot, "README.md"), "utf-8");
@@ -70,6 +70,37 @@ describe("package.json files", () => {
   it("keeps the bundled MCP scripting skill available for manual use only", () => {
     const skill = readFileSync(join(repoRoot, "skills", "mcp-scripting", "SKILL.md"), "utf-8");
     expect(skill).toMatch(/^disable-model-invocation:\s*true\s*$/m);
+  });
+
+  it("ships every doc section the published README links to", () => {
+    const readme = readFileSync(join(repoRoot, "README.md"), "utf-8");
+    const links = [...readme.matchAll(/\]\(([^)]*docs\/[^)]*)\)/g)].map(([, url]) => {
+      const parsed = url!.match(/^https:\/\/github\.com\/nicobailon\/pi-mcp-adapter\/blob\/main\/(docs\/[\w-]+\.md)(?:#([\w-]+))?$/);
+      expect(parsed, url).not.toBeNull();
+      return parsed!;
+    });
+
+    expect(links.length).toBeGreaterThan(0);
+    const publicDocs = [
+      "docs/auth.md",
+      "docs/configuration.md",
+      "docs/extension-api.md",
+      "docs/pi-builtin-comparison.md",
+      "docs/prompts-and-ui.md",
+      "docs/scripting.md",
+      "docs/servers.md",
+      "docs/tools.md",
+    ];
+    const publishedDocs = (packageJson.files ?? []).filter((entry) => entry.startsWith("docs/"));
+    expect(publishedDocs).toEqual(publicDocs);
+    expect(packageJson.files).not.toContain("docs");
+    expect(publishedDocs.some((entry) => entry.includes("bench") || entry.includes("UPSTREAM"))).toBe(false);
+    for (const [, path, anchor] of links) {
+      expect(packageJson.files).toContain(path);
+      const headings = readFileSync(join(repoRoot, path!), "utf-8").match(/^#+ .+$/gm)!
+        .map((heading) => heading.replace(/^#+ /, "").toLowerCase().replace(/[^\w\- ]/g, "").replaceAll(" ", "-"));
+      if (anchor) expect(headings, `${path}#${anchor}`).toContain(anchor);
+    }
   });
 
   it("exports source entry points and plain Node host helpers", () => {
@@ -198,7 +229,13 @@ describe("package.json dependency policy", () => {
   });
 
   it("uses the stable modular SDK v2 client/core packages without the legacy monolithic SDK", () => {
-    expect(packageJson.dependencies?.["@modelcontextprotocol/ext-apps"]).toBeDefined();
+    const packageLock = JSON.parse(readFileSync(join(repoRoot, "package-lock.json"), "utf-8")) as {
+      packages: Record<string, { dev?: boolean }>;
+    };
+    const productionLegacySdk = Object.keys(packageLock.packages).filter(
+      (path) => path.endsWith("node_modules/@modelcontextprotocol/sdk") && !packageLock.packages[path]?.dev
+    );
+    expect(productionLegacySdk).toEqual([]);
     expect(packageJson.dependencies?.["@modelcontextprotocol/sdk"]).toBeUndefined();
     expect(packageJson.dependencies?.["@modelcontextprotocol/client"]).toBe("2.0.0");
     expect(packageJson.dependencies?.["@modelcontextprotocol/core"]).toBe("2.0.0");

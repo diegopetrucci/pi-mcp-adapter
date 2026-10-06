@@ -1,16 +1,16 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { McpExtensionState } from "./state.ts";
-import { formatToolName, isServerDisabled, resolveToolPrefix, type McpAdapterOptions, type PromptMetadata, type ToolMetadata, type ToolSelectorCandidateIndex } from "./types.ts";
-import { existsSync } from "node:fs";
+import { formatToolName, isServerDisabled, resolveToolPrefix, type McpAdapterOptions, type PromptMetadata, type ServerEntry, type ToolMetadata, type ToolSelectorCandidateIndex } from "./types.ts";
 import { cloneMcpConfig, loadMcpConfig, resolveConfiguredClaudePluginMcp } from "./config.ts";
+import { applyProjectServerTrustToConfig, describeProjectServerBlock, excludeProjectServersAtLoadTime } from "./project-server-trust.ts";
 import { ConsentManager } from "./consent-manager.ts";
 import { McpLifecycleManager } from "./lifecycle.ts";
 import {
   computeServerHash,
   createCachedToolSelectorCandidateIndex,
-  getMetadataCachePath,
   getMissingConfiguredDirectToolServers,
   isServerCacheValid,
+  keepOutputShapes,
   loadMetadataCache,
   reconstructPromptMetadata,
   reconstructToolMetadata,
@@ -18,13 +18,14 @@ import {
   serializePrompts,
   serializeResources,
   serializeTools,
+  type MetadataCache,
   type ServerCacheEntry,
 } from "./metadata-cache.ts";
-import { McpServerManager, isTransientHttpConnectError } from "./server-manager.ts";
+import { McpServerManager, isTransientHttpConnectError, type ServerConnection } from "./server-manager.ts";
 import { buildToolMetadata, totalToolCount } from "./tool-metadata.ts";
 import { resourceNameToToolName } from "./resource-tools.ts";
 import { UiResourceHandler } from "./ui-resource-handler.ts";
-import { formatMcpStatus, openUrl, parallelLimit, sanitizeTerminalText } from "./utils.ts";
+import { formatMcpFooterStatus, formatMcpStatus, openUrl, parallelLimit, providerSignInMessage, sanitizeTerminalText } from "./utils.ts";
 import { logger } from "./logger.ts";
 import { throwIfAborted } from "./abort.ts";
 import { getAuthStorageOptions } from "./mcp-auth.ts";
@@ -42,11 +43,16 @@ import {
   createSessionApprovalWriter,
   restoreSessionApprovalState,
 } from "./session-approvals.ts";
-export { getFailureAgeSeconds, getFailureMessage, isServerInActiveFailureBackoff } from "./failure-backoff.ts";
+import { seedObservedOutputs } from "./output-shape.ts";
+export { getFailureAgeSeconds, getFailureMessage } from "./failure-backoff.ts";
 
 const MAX_FAILURE_MESSAGE_CHARS = 8 * 1024;
 const failureExpiryTimers = new WeakMap<McpExtensionState, Map<string, ReturnType<typeof setTimeout>>>();
 
+// TLH fork: detect a connection error that is specifically caused by the caller-provided
+// initial signal being aborted, so we can re-throw the signal's reason instead of silently
+// returning state. The signal can abort for any reason (the error IS the reason, or an
+// AbortError was thrown because the signal was already aborted).
 function isInitialCancellation(error: unknown, signal: AbortSignal | undefined): boolean {
   if (!signal?.aborted) return false;
   return error === signal.reason || error instanceof Error && error.name === "AbortError";
@@ -107,6 +113,9 @@ export function isTuiMode(ctx: Pick<ExtensionContext, "hasUI" | "mode">): boolea
 type McpInitializationOptions = McpAdapterOptions & {
   oauthRuntime?: McpOAuthRuntime;
   statusEvents?: McpExtensionState["statusEvents"];
+  onProjectTrustResolved?: () => void;
+  /** Load-time runs have no Pi context, so project trust is unknown; session_start decides later. */
+  excludeProjectServers?: boolean;
 };
 
 export async function initializeMcp(
@@ -143,9 +152,13 @@ export async function initializeMcp(
   }
   const ui = rawUi ? createOwnedUi(rawUi, owner) : undefined;
   const runtimeSignal = combineAbortSignals(owner.signal, initialSignal);
-  const config = options.config !== undefined
-    ? resolveConfiguredClaudePluginMcp(cloneMcpConfig(options.config), cwd)
-    : loadMcpConfig(configPath, cwd);
+  const trustResult = options.config !== undefined
+    ? { config: resolveConfiguredClaudePluginMcp(cloneMcpConfig(options.config), cwd), blockedServers: new Map() }
+    : options.excludeProjectServers
+      ? { config: excludeProjectServersAtLoadTime(loadMcpConfig(configPath, cwd)), blockedServers: new Map() }
+      : await applyProjectServerTrustToConfig(loadMcpConfig(configPath, cwd), ctx);
+  options.onProjectTrustResolved?.();
+  const config = trustResult.config;
   const authStorageOptions = getAuthStorageOptions(config.settings?.oauthDir, cwd, config.settings?.oauthCredentialStore);
 
   const ownsOAuthRuntime = options.oauthRuntime === undefined;
@@ -156,6 +169,10 @@ export async function initializeMcp(
   manager.setDefaultRequestTimeoutMs(config.settings?.requestTimeoutMs);
   manager.setTraceConfig?.(config.settings?.trace);
   manager.setAuthStorageOptions(authStorageOptions);
+  // Pi before 0.99.2 has no getApiKeyForProvider; auth.provider servers then fail to connect with a notice.
+  if (typeof modelRegistry?.getApiKeyForProvider === "function") {
+    manager.setProviderToken(provider => modelRegistry.getApiKeyForProvider(provider));
+  }
   const samplingAutoApprove = config.settings?.samplingAutoApprove === true;
   if (config.settings?.sampling !== false && (hasUI || samplingAutoApprove)) {
     manager.setSamplingConfig({
@@ -214,6 +231,7 @@ export async function initializeMcp(
     failureTracker,
     failureMessages,
     approvedToolCalls,
+    blockedProjectServers: trustResult.blockedServers,
     approvedServers: new Map(),
     ...(persistSessionApproval !== undefined ? { persistSessionApproval } : {}),
     ...(sessionManager !== undefined ? { sessionManager } : {}),
@@ -222,7 +240,6 @@ export async function initializeMcp(
     consentManager,
     uiServer: null,
     completedUiSessions: [],
-    sessionCwd: cwd,
     openBrowser: async (url: string) => {
       owner.throwIfInactive();
       await openUrl(pi, url, process.env.BROWSER, owner.signal);
@@ -246,13 +263,14 @@ export async function initializeMcp(
       });
     },
     ...(options.statusEvents !== undefined ? { statusEvents: options.statusEvents } : {}),
+    ...(cwd !== undefined ? { sessionCwd: cwd } : {}),
   };
   if (sessionManager) restoreSessionApprovalState(state, sessionBranch);
   if (ownsOAuthRuntime) owner.addCleanup(() => shutdownOAuth(oauthRuntime));
   manager.setMetadataListChangedListener?.((serverName, reason) => {
     if (!owner.isActive()) return;
     updateServerMetadata(state, serverName);
-    updateMetadataCache(state, serverName, state.sessionCwd);
+    updateMetadataCache(state, serverName);
     notifyToolMetadataUpdated(state, serverName, reason);
     updateStatusBar(state);
   });
@@ -273,29 +291,21 @@ export async function initializeMcp(
 
   const allServerEntries = Object.entries(config.mcpServers);
   const serverEntries = allServerEntries.filter(([, definition]) => !isServerDisabled(definition));
-  if (serverEntries.length === 0) {
-    if (allServerEntries.length > 0 && hasUI) {
-      ui?.notify(`MCP: All ${allServerEntries.length} server(s) are disabled`, "info");
-    }
-    publishMcpStatusSnapshot(state);
-    return state;
+  if (serverEntries.length === 0 && allServerEntries.length > 0 && hasUI) {
+    ui?.notify(`MCP: All ${allServerEntries.length} server(s) are disabled`, "info");
+  }
+  if (trustResult.blockedServers.size > 0) {
+    const summary = [...trustResult.blockedServers].map(([name, entry]) => `${name} (${describeProjectServerBlock(entry.reason)})`).join(", ");
+    if (hasUI) ui?.notify(`MCP: Project servers blocked: ${summary}`, "warning");
+    else console.warn(`MCP: Project servers blocked: ${summary}`);
   }
 
   const idleSetting = typeof config.settings?.idleTimeout === "number" ? config.settings.idleTimeout : 10;
   lifecycle.setGlobalIdleTimeout(idleSetting);
 
-  const cachePath = getMetadataCachePath();
-  const cacheFileExists = existsSync(cachePath);
-  let cache = loadMetadataCache();
-  let bootstrapAll = false;
-
-  if (!cacheFileExists) {
-    bootstrapAll = true;
-    saveMetadataCache({ version: 1, servers: {} });
-  } else if (!cache) {
-    cache = { version: 1, servers: {} };
-    saveMetadataCache(cache);
-  }
+  const cache = serverEntries.length > 0 ? loadMetadataCache() : null;
+  const needsDiscovery = new Set<string>();
+  const failedDiscovery = new Set<string>();
 
   const prefix = config.settings?.toolPrefix ?? "server";
   let cachedSelectorCandidateIndex: ToolSelectorCandidateIndex | undefined;
@@ -332,15 +342,22 @@ export async function initializeMcp(
       if (cachedEntry.instructions) {
         serverInstructions.set(name, cachedEntry.instructions);
       }
+      seedObservedOutputs(state, name, cachedEntry);
+    } else if (cachedEntry?.discoveryFailed && cachedEntry.configHash === tryComputeServerHash(definition, cwd)) {
+      // Startup tries a config once; a server that failed is tried again on first use.
+      failedDiscovery.add(name);
+    } else if (cachedEntry?.cacheScope !== "private") {
+      needsDiscovery.add(name);
     }
   }
 
-  const startupServers = bootstrapAll
-    ? serverEntries
-    : serverEntries.filter(([, definition]) => {
-        const mode = definition.lifecycle ?? "lazy";
-        return mode === "keep-alive" || mode === "eager";
-      });
+  const startupServers = serverEntries
+    .filter(([name, definition]) => {
+      const mode = definition.lifecycle ?? "lazy";
+      return mode === "keep-alive" || mode === "eager" || needsDiscovery.has(name);
+    })
+    // Load-time runs have no model registry for auth.provider; session_start connects those servers.
+    .filter(([, definition]) => !(options.excludeProjectServers && typeof definition.auth === "object"));
 
   if (ui && startupServers.length > 0) {
     const status = formatMcpStatus(state.config, `connecting to ${startupServers.length} servers...`);
@@ -348,28 +365,48 @@ export async function initializeMcp(
   }
 
   const results = await parallelLimit(startupServers, 10, async ([name, definition]) => {
+    const resident = (definition.lifecycle ?? "lazy") !== "lazy" || getEffectiveIdleTimeoutMinutes(state, name) === 0;
     try {
       const connection = await manager.connect(name, definition, runtimeSignal);
       if (connection.status === "needs-auth") {
-        return { name, definition, connection: null, error: `OAuth authentication required. Run /mcp-auth ${name}.`, transient: false };
+        const error = typeof definition.auth === "object"
+          ? providerSignInMessage(name, definition.auth.provider)
+          : `OAuth authentication required. Run /mcp-auth ${name}.`;
+        return { name, definition, resident, connection: null, error, transient: false };
       }
-      return { name, definition, connection, error: null, transient: false };
+      // Capture before closing; the closed connection keeps its catalog for publication below.
+      captureMetadata(state, name, connection, () => cache, cwd);
+      if (!resident) await manager.close(name);
+      return { name, definition, resident, connection, error: null, transient: false };
     } catch (error) {
       if (isInitialCancellation(error, initialSignal) && owner.isActive()) {
         throwIfAborted(initialSignal);
       }
       if (isAbortError(error, runtimeSignal)) {
         if (owner.signal.aborted) throw error;
-        return { name, definition, connection: null, error: null, transient: false };
+        return { name, definition, resident, connection: null, error: null, transient: false };
       }
       const transient = isTransientHttpConnectError(error);
       const message = error instanceof Error ? error.message : String(error);
-      return { name, definition, connection: null, error: message, transient };
+      return { name, definition, resident, connection: null, error: message, transient };
     }
   });
 
   if (initialSignal?.aborted) return state;
   owner.throwIfInactive();
+
+  // One merged write for the whole pass; rewriting the file per server is slow with large catalogs.
+  const captured = results.flatMap(({ name, definition, connection, error, transient }): [string, ServerCacheEntry][] => {
+    if (connection) {
+      const entry = state.sessionMetadata?.get(name);
+      return entry ? [[name, entry]] : [];
+    }
+    // Mark a failed discovery so later sessions skip this config; transient outages stay unmarked.
+    if (!error || transient || !needsDiscovery.has(name)) return [];
+    const configHash = tryComputeServerHash(definition, cwd);
+    return configHash ? [[name, { configHash, tools: [], resources: [], discoveryFailed: true, cachedAt: Date.now() }]] : [];
+  });
+  if (captured.length > 0) saveMetadataCache({ version: 1, servers: Object.fromEntries(captured) }, { startupSnapshot: cache?.servers ?? {} });
 
   const startupKnownMetadata = new Map<string, ToolMetadata[]>();
   for (const { name, definition, connection } of results) {
@@ -426,7 +463,6 @@ export async function initializeMcp(
     } else {
       serverInstructions.delete(name);
     }
-    updateMetadataCache(state, name, state.sessionCwd);
     notifyToolMetadataUpdated(state, name, "startup");
     markKeepAliveAfterConnect(state, name);
 
@@ -438,12 +474,13 @@ export async function initializeMcp(
     }
   }
 
-  const connectedCount = results.filter(r => r.connection).length;
-  const failedCount = results.filter(r => r.error).length;
+  const residentResults = results.filter(r => r.resident);
+  const connectedCount = residentResults.filter(r => r.connection).length;
+  const failedCount = residentResults.filter(r => r.error).length;
   if (ui && connectedCount > 0 && config.settings?.notifyOnStartupConnect !== false) {
     const totalTools = totalToolCount(state);
     const msg = failedCount > 0
-      ? `MCP: ${connectedCount}/${startupServers.length} servers connected (${totalTools} tools)`
+      ? `MCP: ${connectedCount}/${residentResults.length} servers connected (${totalTools} tools)`
       : `MCP: ${connectedCount} servers connected (${totalTools} tools)`;
     ui.notify(msg, "info");
   }
@@ -456,7 +493,8 @@ export async function initializeMcp(
 
     if (missingCacheServers.length > 0) {
       const bootstrapResults = await parallelLimit(
-        missingCacheServers.filter(name => !results.some(r => r.name === name && r.connection)),
+        // Startup already attempted these servers, in this session or in an earlier one that failed.
+        missingCacheServers.filter(name => !failedDiscovery.has(name) && !results.some(r => r.name === name)),
         10,
         async (name) => {
           try {
@@ -467,7 +505,7 @@ export async function initializeMcp(
               return { name, ok: false };
             }
             updateServerMetadata(state, name);
-            updateMetadataCache(state, name, state.sessionCwd);
+            updateMetadataCache(state, name);
             const restored = clearFailure(state, name, "direct-tools-bootstrap");
             if (!restored) notifyToolMetadataUpdated(state, name, "direct-tools-bootstrap");
             markKeepAliveAfterConnect(state, name);
@@ -498,7 +536,7 @@ export async function initializeMcp(
   lifecycle.setReconnectCallback((serverName) => {
     if (!owner.isActive()) return;
     updateServerMetadata(state, serverName);
-    updateMetadataCache(state, serverName, state.sessionCwd);
+    updateMetadataCache(state, serverName);
     const restored = clearFailure(state, serverName, "lifecycle-reconnect");
     if (!restored) notifyToolMetadataUpdated(state, serverName, "lifecycle-reconnect");
     updateStatusBar(state);
@@ -589,32 +627,53 @@ export function updateMetadataCache(
   serverName: string,
   defaultCwd = state.sessionCwd,
 ): void {
-  if (state.provisionalInstalls?.has(serverName)) return;
   const connection = state.manager.getConnection(serverName);
   if (!connection || connection.status !== "connected") return;
+  const entry = captureMetadata(state, serverName, connection, loadMetadataCache, defaultCwd);
+  if (entry) saveMetadataCache({ version: 1, servers: { [serverName]: entry } });
+}
 
+/** Builds a server's cache entry from a connection's catalog and records it as this session's metadata. */
+function captureMetadata(
+  state: McpExtensionState,
+  serverName: string,
+  connection: ServerConnection,
+  loadCache: () => MetadataCache | null,
+  defaultCwd?: string,
+): ServerCacheEntry | undefined {
+  if (state.provisionalInstalls?.has(serverName)) return undefined;
   const definition = state.config.mcpServers[serverName];
-  if (!definition || isServerDisabled(definition)) return;
+  if (!definition || isServerDisabled(definition)) return undefined;
 
   const configHash = computeServerHash(definition, defaultCwd);
-  const existing = loadMetadataCache();
-  const existingEntry = existing?.servers?.[serverName];
+  if (connection.definition && computeServerHash(connection.definition, defaultCwd) !== configHash) return undefined;
+  const existingEntry = loadCache()?.servers?.[serverName];
 
   const tools = serializeTools(connection.tools);
   let resources = definition.exposeResources === false ? [] : serializeResources(connection.resources);
+  const sessionEntry = state.sessionMetadata?.get(serverName);
+  const cacheScope = connection.toolListHints?.cacheScope;
+  // Metadata from a private listing is tied to that authorization context; it may only fill an entry that is private too.
+  const sessionFallback = sessionEntry?.configHash === configHash && (sessionEntry.cacheScope !== "private" || cacheScope === "private")
+    ? sessionEntry
+    : undefined;
   const prompts = connection.promptDiscoveryFailed
-    ? existingEntry?.configHash === configHash ? existingEntry.prompts : undefined
+    ? sessionFallback
+      ? sessionFallback.prompts
+      : existingEntry?.configHash === configHash && isServerCacheValid(existingEntry, definition, undefined, defaultCwd)
+        ? existingEntry.prompts
+        : undefined
     : serializePrompts(connection.prompts ?? []);
 
-  if (
-    definition.exposeResources !== false &&
-    connection.resourceDiscoveryFailed === true &&
-    existingEntry?.resources?.length &&
-    isServerCacheValid(existingEntry, definition, undefined, defaultCwd)
-  ) {
-    resources = existingEntry.resources;
+  if (definition.exposeResources !== false && connection.resourceDiscoveryFailed === true) {
+    if (sessionFallback) {
+      resources = sessionFallback.resources ?? [];
+    } else if (existingEntry?.resources?.length && isServerCacheValid(existingEntry, definition, undefined, defaultCwd)) {
+      resources = existingEntry.resources;
+    }
   }
 
+  const outputShapes = keepOutputShapes(existingEntry, configHash, tools);
   const entry: ServerCacheEntry = {
     configHash,
     tools,
@@ -622,11 +681,14 @@ export function updateMetadataCache(
     ...(prompts !== undefined ? { prompts } : {}),
     ...(connection.instructions !== undefined ? { instructions: connection.instructions } : {}),
     ...(connection.toolListHints?.ttlMs !== undefined ? { ttlMs: connection.toolListHints.ttlMs } : {}),
-    ...(connection.toolListHints?.cacheScope !== undefined ? { cacheScope: connection.toolListHints.cacheScope } : {}),
+    ...(cacheScope !== undefined ? { cacheScope } : {}),
+    ...(outputShapes !== undefined ? { outputShapes } : {}),
     cachedAt: Date.now(),
   };
 
-  saveMetadataCache({ version: 1, servers: { [serverName]: entry } });
+  (state.sessionMetadata ??= new Map()).set(serverName, entry);
+  seedObservedOutputs(state, serverName, entry);
+  return entry;
 }
 
 export function notifyToolMetadataUpdated(state: McpExtensionState, serverName: string, reason: string): void {
@@ -647,7 +709,7 @@ export function notifyToolMetadataUpdated(state: McpExtensionState, serverName: 
 export function flushMetadataCache(state: McpExtensionState): void {
   for (const [name, connection] of state.manager.getAllConnections()) {
     if (connection.status === "connected") {
-      updateMetadataCache(state, name, state.sessionCwd);
+      updateMetadataCache(state, name);
     }
   }
 }
@@ -711,7 +773,7 @@ export async function lazyConnect(state: McpExtensionState, serverName: string, 
       return false;
     }
     updateServerMetadata(state, serverName);
-    updateMetadataCache(state, serverName, state.sessionCwd);
+    updateMetadataCache(state, serverName);
     const restored = clearFailure(state, serverName, "lazy-connect");
     if (!restored) notifyToolMetadataUpdated(state, serverName, "lazy-connect");
     markKeepAliveAfterConnect(state, serverName);
@@ -738,4 +800,13 @@ function getEffectiveIdleTimeoutMinutes(state: McpExtensionState, serverName: st
   const mode = definition.lifecycle ?? "lazy";
   if (mode === "eager" || mode === "lazy-keep-alive") return 0;
   return typeof state.config.settings?.idleTimeout === "number" ? state.config.settings.idleTimeout : 10;
+}
+
+/** The config hash, or undefined when the config can't be resolved yet (for example a missing env var in the URL). */
+function tryComputeServerHash(definition: ServerEntry, defaultCwd?: string): string | undefined {
+  try {
+    return computeServerHash(definition, defaultCwd);
+  } catch {
+    return undefined;
+  }
 }

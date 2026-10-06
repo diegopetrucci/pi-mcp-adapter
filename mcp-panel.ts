@@ -3,7 +3,7 @@ import { copyToClipboard, type Theme } from "@earendil-works/pi-coding-agent";
 import { createPanelKeys, type PanelKeybindings, type PanelKeys } from "./panel-keys.ts";
 import { createMcpPanelTheme, McpPanelFrame, type McpPanelTheme } from "./mcp-panel-theme.ts";
 import { getToolNameCandidates, isServerDisabled, isToolAllowed, resolveToolPrefix } from "./types.ts";
-import type { McpConfig, McpPanelCallbacks, McpPanelResult, ServerProvenance, ToolPrefix } from "./types.ts";
+import type { McpConfig, McpPanelCallbacks, McpPanelResult, ServerEntry, ServerProvenance, ToolPrefix } from "./types.ts";
 import { resourceNameToToolName } from "./resource-tools.ts";
 import { sanitizeTerminalText, stripOscSequences } from "./utils.ts";
 import { isServerCacheValid, type MetadataCache, type ServerCacheEntry, type CachedTool } from "./metadata-cache.ts";
@@ -60,13 +60,17 @@ function sanitizeRowContent(content: string): string {
   return result;
 }
 
+function serverDescription(definition: ServerEntry | undefined, entry: ServerCacheEntry | undefined): string | undefined {
+  return definition?.description?.trim() || entry?.instructions?.trim().split("\n", 1)[0] || undefined;
+}
+
 function estimateTokens(tool: CachedTool): number {
   const schemaLen = JSON.stringify(tool.inputSchema ?? {}).length;
   const descLen = tool.description?.length ?? 0;
   return Math.ceil((tool.name.length + descLen + schemaLen) / 4) + 10;
 }
 
-type ConnectionStatus = "connected" | "idle" | "failed" | "needs-auth" | "connecting" | "disabled";
+type ConnectionStatus = "connected" | "idle" | "failed" | "needs-auth" | "connecting" | "blocked" | "disabled";
 
 interface ToolState {
   name: string;
@@ -78,9 +82,12 @@ interface ToolState {
 
 interface ServerState {
   name: string;
+  summary: string | undefined;
   expanded: boolean;
   source: "user" | "project" | "import";
   importKind?: string;
+  ignoredSettings?: string[];
+  signInProvider?: string;
   includeTools?: string[];
   excludeTools?: string[];
   exposeResources: boolean;
@@ -116,6 +123,7 @@ interface McpPanelViewState {
   authInFlight: string | null;
   authOnly: boolean;
   saveLabel: string | null;
+  canImportPiSignIns: boolean;
 }
 
 /**
@@ -190,9 +198,18 @@ class McpPanelView implements Component {
 
         if (item.type === "server") {
           this.addRow(this.renderServerRow(state, server, isCursor), innerWidth);
+          if (server.expanded && server.summary) {
+            this.addRow(`    ${this.theme.description(sanitizeDisplayText(server.summary))}`, innerWidth);
+          }
           if (isCursor && server.connectionStatus === "failed" && server.failureMessage) {
             for (const line of this.wrapText(sanitizeDisplayText(server.failureMessage), innerWidth - 6)) {
               this.addRow(`    ${this.theme.cancel(line)}`, innerWidth);
+            }
+          }
+          if ((isCursor || server.expanded) && server.ignoredSettings) {
+            const text = `Ignored Pi mcp.json settings: ${server.ignoredSettings.join(", ")}`;
+            for (const line of this.wrapText(sanitizeDisplayText(text), innerWidth - 6)) {
+              this.addRow(`    ${this.theme.hint(line)}`, innerWidth);
             }
           }
         } else if (item.toolIndex !== undefined) {
@@ -267,6 +284,7 @@ class McpPanelView implements Component {
           this.theme.italic("ctrl+a") + " auth",
           this.theme.italic("ctrl+r") + " reconnect",
           this.theme.italic("ctrl+d") + " disable/enable",
+          ...(state.canImportPiSignIns ? [this.theme.italic("ctrl+p") + " import sign-ins from Pi"] : []),
           ...(this.selectedServerHasFailureMessage(state) ? [this.theme.italic("ctrl+y") + " copy error"] : []),
           this.theme.italic("?") + " desc search",
           ...(state.saveLabel ? [this.theme.italic(state.saveLabel) + " save"] : []),
@@ -405,6 +423,7 @@ class McpPanelView implements Component {
 
   private renderConnectionStatus(state: McpPanelViewState, server: ServerState): string {
     if (state.authInFlight === server.name) return `  ${this.theme.needsAuth("authenticating")}`;
+    if (server.connectionStatus === "blocked") return `  ${this.theme.needsAuth("blocked by project trust")}`;
     if (server.disabled) return `  ${this.theme.description("disabled")}`;
     if (server.connectionStatus === "needs-auth") return `  ${this.theme.needsAuth("needs auth")}`;
     if (server.connectionStatus === "connecting") return `  ${this.theme.needsAuth("connecting")}`;
@@ -445,6 +464,7 @@ class McpPanel {
   private importNotice: string | null = null;
   private authNotice: string | null = null;
   private authInFlight: string | null = null;
+  private piSignInsImported = false;
   private inactivityTimeout: ReturnType<typeof setTimeout> | null = null;
   private visibleItems: VisibleItem[] = [];
   private tui: { requestRender(): void };
@@ -540,9 +560,12 @@ class McpPanel {
       }
       this.servers.push({
         name: serverName,
+        summary: serverDescription(definition, serverCache),
         expanded: false,
         source: prov?.kind ?? "user",
         ...(prov?.importKind !== undefined ? { importKind: prov.importKind } : {}),
+        ...(prov?.ignoredSettings !== undefined ? { ignoredSettings: prov.ignoredSettings } : {}),
+        ...(typeof definition.auth === "object" ? { signInProvider: definition.auth.provider } : {}),
         ...(definition.includeTools !== undefined ? { includeTools: definition.includeTools } : {}),
         ...(definition.excludeTools !== undefined ? { excludeTools: definition.excludeTools } : {}),
         exposeResources: definition.exposeResources !== false,
@@ -613,12 +636,13 @@ class McpPanel {
 
     if (query && !this.authOnly) {
       this.visibleItems = this.visibleItems.filter((item) => {
-        if (item.type === "server") {
-          return this.visibleItems.some(
-            (other) => other.type === "tool" && other.serverIndex === item.serverIndex,
-          );
-        }
-        return true;
+        if (item.type !== "server") return true;
+        const server = this.servers[item.serverIndex];
+        // Servers without cached tools (disabled, never connected) can only match by name.
+        if (mode === "name" && server && fuzzyScore(query, server.name) > 0) return true;
+        return this.visibleItems.some(
+          (other) => other.type === "tool" && other.serverIndex === item.serverIndex,
+        );
       });
     }
   }
@@ -735,7 +759,7 @@ class McpPanel {
       const item = this.visibleItems[this.cursorIndex];
       if (!item) return;
       const server = this.servers[item.serverIndex];
-      if (!server) return;
+      if (!server || server.connectionStatus === "blocked") return;
       if (item.type === "server") {
         if (server.connectionStatus === "disabled") return;
         if (this.authOnly || server.connectionStatus === "needs-auth") {
@@ -750,7 +774,7 @@ class McpPanel {
         if (!tool) return;
         this.toggleToolDirect(server, tool);
         if (tool.isDirect && server.source === "import") {
-          this.importNotice = `Imported from ${sanitizeDisplayText(server.importKind ?? "external")} — will copy to user config on save`;
+          this.importNotice = `Imported from ${sanitizeDisplayText(server.importKind ?? "external")} — will copy to adapter config on save`;
         }
         this.updateDirty();
       }
@@ -775,7 +799,7 @@ class McpPanel {
       const item = this.visibleItems[this.cursorIndex];
       if (!item || item.type !== "server" || this.authOnly) return;
       const server = this.servers[item.serverIndex];
-      if (!server) return;
+      if (!server || server.connectionStatus === "blocked") return;
       server.disabled = !server.disabled;
       this.updateDirty();
       this.tui.requestRender();
@@ -797,6 +821,13 @@ class McpPanel {
         this.authNotice = `Failed to copy error for ${serverName}: ${message}`;
         this.tui.requestRender();
       });
+      return;
+    }
+
+    if (matchesKey(data, "ctrl+p")) {
+      if (!this.authOnly && !this.piSignInsImported && this.callbacks.importPiSignIns) {
+        this.importPiSignIns(this.callbacks.importPiSignIns);
+      }
       return;
     }
 
@@ -833,10 +864,27 @@ class McpPanel {
     if (server) this.authenticateServer(server);
   }
 
+  private importPiSignIns(importPiSignIns: NonNullable<McpPanelCallbacks["importPiSignIns"]>): void {
+    const { imported, failed } = importPiSignIns();
+    this.piSignInsImported = failed.length === 0;
+    const notices = [
+      ...(imported.length > 0 ? [`Imported sign-ins from Pi for ${imported.map(sanitizeDisplayText).join(", ")}. Reconnecting...`] : []),
+      ...failed.map(({ server, error }) => `Failed to import the sign-in from Pi for ${sanitizeDisplayText(server)}: ${sanitizeDisplayText(error)}`),
+    ];
+    this.authNotice = notices.length > 0 ? notices.join(" ") : "No sign-ins from Pi left to import.";
+    for (const server of this.servers) {
+      if (imported.includes(server.name)) this.reconnectServer(server);
+    }
+  }
+
   private authenticateServer(server: ServerState): void {
     if (this.authInFlight) return;
-    if (server.connectionStatus === "connecting" || server.connectionStatus === "disabled") return;
+    if (server.connectionStatus === "connecting" || server.connectionStatus === "disabled" || server.connectionStatus === "blocked") return;
     const serverName = sanitizeDisplayText(server.name);
+    if (server.signInProvider !== undefined) {
+      this.authNotice = `${serverName} signs in with Pi: run /login ${sanitizeDisplayText(server.signInProvider)}, then press ctrl+r to reconnect.`;
+      return;
+    }
     if (!this.callbacks.canAuthenticate(server.name)) {
       this.authNotice = `${serverName} does not use OAuth authentication.`;
       return;
@@ -870,7 +918,7 @@ class McpPanel {
   }
 
   private reconnectServer(server: ServerState, options: { afterAuth?: boolean } = {}): void {
-    if (server.connectionStatus === "connecting" || server.connectionStatus === "disabled") return;
+    if (server.connectionStatus === "connecting" || server.connectionStatus === "disabled" || server.connectionStatus === "blocked") return;
     const serverName = sanitizeDisplayText(server.name);
     server.connectionStatus = "connecting";
     this.tui.requestRender();
@@ -883,6 +931,7 @@ class McpPanel {
         if (entry) {
           this.cache ??= { version: 1, servers: {} };
           this.cache.servers[server.name] = entry;
+          server.summary = serverDescription(this.config.mcpServers[server.name], entry);
           this.rebuildServerTools(server, entry);
           server.hasCachedData = true;
         }
@@ -908,7 +957,7 @@ class McpPanel {
     if (item.type === "server") {
       const newState = !server.tools.every((t) => t.isDirect);
       if (server.source === "import" && newState) {
-        this.importNotice = `Imported from ${sanitizeDisplayText(server.importKind ?? "external")} — will copy to user config on save`;
+        this.importNotice = `Imported from ${sanitizeDisplayText(server.importKind ?? "external")} — will copy to adapter config on save`;
       }
       let directTokens = 0;
       for (const tool of server.tools) {
@@ -922,7 +971,7 @@ class McpPanel {
       if (!tool) return;
       this.toggleToolDirect(server, tool);
       if (tool.isDirect && server.source === "import") {
-        this.importNotice = `Imported from ${sanitizeDisplayText(server.importKind ?? "external")} — will copy to user config on save`;
+        this.importNotice = `Imported from ${sanitizeDisplayText(server.importKind ?? "external")} — will copy to adapter config on save`;
       }
     }
     this.updateDirty();
@@ -1072,6 +1121,7 @@ class McpPanel {
       authInFlight: this.authInFlight,
       authOnly: this.authOnly,
       saveLabel: this.keys.saveLabel(),
+      canImportPiSignIns: !this.authOnly && !this.piSignInsImported && this.callbacks.importPiSignIns !== undefined,
     };
   }
 

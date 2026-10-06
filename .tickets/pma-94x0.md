@@ -1,0 +1,57 @@
+---
+id: pma-94x0
+status: closed
+deps: []
+links: []
+created: 2026-10-04T17:26:33Z
+type: bug
+priority: 1
+assignee: Diego Petrucci
+---
+# Scope connect tool reporting to its discovery operation
+
+Bounded correction of combined reviewer22700599's connect attribution blocker under pma-gkeb. Writable scope ONLY index.ts, mcp-runtime.ts, __tests__/index-lifecycle.test.ts, __tests__/mcp-runtime.test.ts. Background list-changed/panel/runtime-registration refresh additions accumulate in the per-server queue and leak into a later connect; removed entries also pass undefined !== true. Return addedToolNames only for eligible current eager additions or adapter-owned restorations attributable to that connect, never unrelated earlier/background additions, removed/backoff-unavailable names, or held-inactive lazy/search tools. Prune dropped/unavailable names and bound attribution to the operation without clobbering same-server overlapping discovery. Preserve user-deactivated choices, once-only overlapping discovery/reactivation, cross-server attribution, and real cold eager discovery/search behavior. Keep public MCP/config contracts and all accepted deferred result, scripting, hidden/live execution, native/panel/trust, shared-signal/deadline/import/shutdown safeguards unchanged. Runtime/package registrations remain proxy-only unless explicitly overridden. Read AGENTS.md, docs/UPSTREAM-SYNC.md, docs/tlh-patch-inventory.md and relevant gn decisions; read tk show THIS ticket first. Repros: /tmp/gkeb-final-cr (read-only comparison, never restoration source). No unrelated refactor, source/test deletion, weakened assertions, user-config writes, ticket/gnosis edits, staging/unstaging, commits, reset/restore/stash or branch/worktree operations. Preserve all existing work and intentional merge index SHA256 32f1524e43672921f6cea6095e696c01b3948babf13970aeb00b5efeb22c04e4. Full npm/B76/whole-merge/Jev/policy/release checks and broad final verification are deferred to their owning tickets; independent source review remains required. Stop unexpected failures; preserve first failing command/name/output/stack, diagnose fixture construction before correction, never rerun-until-green.
+
+## Design
+
+Use the smallest session/operation-owned attribution boundary consistent with existing once-only overlap behavior. Blindly clearing a server queue for every connect can destroy another in-flight result; a before/after snapshot alone must not report unrelated concurrent background discovery. Restore/protect ownership on every exit; no generalized lifecycle redesign.
+
+## Acceptance Criteria
+
+Permanent real-facade/runtime tests must exercise actual metadata hooks/catalog transitions and actual returned/registered/active surfaces, not mock identities or self-referential outputs: (1) background addition followed by no-discovery connect returns no addedToolNames; retain a genuine manual deactivation and assert no revival; (2) background add then removal before connect never reports nonexistent names; (3) unrelated same-server background refresh during an in-flight connect is not attributed to connect; (4) queued names removed or made backoff-unavailable before consumption are excluded; (5) genuine connect-caused eager discovery and adapter-owned reactivation still report, once across same-server overlap; different-server additions stay isolated. Retain all existing overlapping/cross-server, held-lazy/search, stale-tool, selected scripting, structured deferred result and lifecycle assertions. Failed/cancelled/replaced operations must not leave attribution authority for a later operation or clear a successor's state; preserve caller/shared-startup cancellation separation. Prefer observed operation/hook gates, not guessed resolver-call counts or sleep-only proof.
+Run these ticket-local checks (each once; stop/preserve failure):
+1. npx tsc --noEmit
+2. env -u MCP_DIRECT_TOOLS npx vitest run __tests__/index-lifecycle.test.ts __tests__/mcp-runtime.test.ts __tests__/direct-tool-host-contract.test.ts __tests__/index-direct-refresh-execution.test.ts __tests__/index-facade-lifecycle.test.ts __tests__/index-startup-budget.test.ts
+3. env MCP_DIRECT_TOOLS=__none__ npx vitest run __tests__/index-lifecycle.test.ts __tests__/mcp-runtime.test.ts __tests__/direct-tool-host-contract.test.ts __tests__/index-direct-refresh-execution.test.ts __tests__/index-facade-lifecycle.test.ts __tests__/index-startup-budget.test.ts
+4. git diff --check -- index.ts mcp-runtime.ts __tests__/index-lifecycle.test.ts __tests__/mcp-runtime.test.ts
+5. test -z "$(git ls-files -u)"
+6. test -z "$(git diff --cached --name-only -- .tickets)"
+7. test "$(git ls-files --stage | shasum -a 256)" = "32f1524e43672921f6cea6095e696c01b3948babf13970aeb00b5efeb22c04e4  -"
+Report actual commands/exits/counts/no skips, precise baseline delta and no files newly staged/existing merge index unchanged. Positive fixtures may explicitly unset an inherited override to exercise the intended branch, without weakening negative-mode controls. Do not execute the separate final ten-step validation or full npm here.
+
+
+## Notes
+
+**2026-10-04T17:29:48Z**
+
+Human approved created tickets/start. Sole implementation slice selected by tk ready; current branch upstream-intake-v5.0.0. Read-only before-source/status/diff/index snapshots at /tmp/pma-94x0-before.PRXO66 for review ONLY, never restoration. Preserve pre-existing staged/unstaged/untracked work; existing256-path merge index unchanged. One new developer dispatch for THIS newly approved bounded ticket; exhausted/near-exhausted earlier runs remain untouched, not budget reset. Final pma-cy7a ten-step validation and fresh combined pma-gkeb source acceptance remain separate.
+
+**2026-10-04T18:04:09Z**
+
+Independent scoped reviewer efbcef4f substantively REJECTED: FIFO firstConnectAttribution credits a later successful same-server caller's proxy-connect event to earlierpending A; A rejection loses B discovery, returned aborted errorresult incorrectly reports B names on A. Real catalog/facade probes /tmp/rv94-probe confirm both; existing237 tests remaingreen. Required bounded corrections: emitting-operation identity (reviewer temp Node AsyncLocalStorage proof keeps all protections green), permanent overlapthrow/errorresult tests, queued connect additions→removal/backoff beforeconsume, realfacade in-flight sessionreplacement and successor discovery/ownercleanup. Mocktoken unitwiring alone is not sufficient; retain it and all existing assertions. Original4path scope and sevenlocalchecks remain authoritative; no proxy-modes edits, generalized redesign, new staging/config/tickets/gnosis/commit. Parent inspected originalfirst4failures/logs, both literal237 groups and rawcommands; only4 allowed unstaged patchblocks changed; fingerprint unchanged. Developer80b129dc originalrun ~19m14 consumed (status), safely resume samebudget/noreset. pma-cy7a still blocked; wholecombinedgkeb acceptance outstanding.
+
+**2026-10-04T18:16:41Z**
+
+Developer2940f052 emitting-operation AsyncLocalStorage followup complete. Current6files242 tests eachliteral env mode; lifecycle176/runtime18. Added2real overlapping A throw(actualcallerAbortController)/aborted errorresult cases,2queued-removal/backoff cases,1realfacade replacement case. TS firstfailure mcp-runtime.ts962 nullableclosure preserved /tmp/pma-94x0-followup-check-01-20261004T.log; capture executionState correction checked01b0, fullgroups02/03 all242/no skips, preservation04..07 all0. Parent readactualsource/cases/logs, rawfirst-stagecommands and4allowedpatchdelta; index/statusunchanged. Re-review a9d097a3 (efbcef4f continuation) running againstcurrentproduction/tests; replacementcase currentlysuccessorreturnsBEFOREoldcallfinally, so pendingqueued-successor clearing may be unobservable—reviewer asked concrete temp mutation/probe rather than waive based on title or green suite. Additional introducedconsume externalgetter reentrancy check requested ifprovablewithinbounded scope. Ticket notclosed; pma-cy7a remains blocked and no finalvalidation/test-runner started; freshcombinedgkeb/fullmerge remain outstanding. Generic existingstaged acceptance notice notsourcefinding orauthoritytounstage; configured persistedmodel fallback notices cause no overrides/modelconfigchange.
+
+**2026-10-04T18:18:56Z**
+
+Scoped reviewer a9d097a3 ACCEPTED SOURCE (AsyncLocalStorage actualemitter/token/reason/server gates correct, index unchanged), REJECTED tests. Proved temp M1 runtimefinally discardall and M2 indexdiscards allsame-server names leave ALL242 currentpermanent tests green; addedH1replacement/H2overlap throw+errorresult alone fail (3), clean245 pass BOTHmodes. Required TESTONLY hardening: keep successor queued AFTER actualproxy-connect hook but BEFOREconsume, settleolder failure/replacement, then release successor and assert exactownnames/currentregistered+active plus failedresultnone. Preserve currentfirst-finished scenarios/assertions by ADDING3 cases (preferred), not deleting/weakening originals. AllowedthisiterationONLY __tests__/index-lifecycle.test.ts; production index/runtime and runtimeunit mustremain byteidentical, hashes /tmp/pma-94x0-before-test-hardening-source.sha256. Temp /tmp/rv94c-probe read-onlyreferenceNEVERrestore; allfirstfailures/logs/source/index humanwork preserved. Original7localchecks stillrequired; finalcy7a blocked pending substantivefullsliceacceptance. Customreentrant activegetter ownresult risk (stockpure/no demonstratedbug/no surfacepublish) and implicitALStransportinheritance gatedbyreason/livetoken are residuals, not sourcefindings/authorizationforbroaderchange.
+
+**2026-10-04T18:28:16Z**
+
+TestONLY developer6d4f2874 added3H1/H2 queued-beforeconsume cases; all previouscases/assertions retained. Parentreadactual3bodies,245/no-skipsfullsixfileliteralunset/none logs, tsc0; independentlyhashchecked index/runtime/runtimeunit unchanged frombeforehardening. Reviewbb0a55e8 (a9d097a3 continuation) running toverify CURRENTretainedpermanenttests catch BOTHcleanupM1/M2 and retainFIFO-M3 protection beforefullsliceacceptance. Originalsource4pathscope preserved; indexfingerprint/unmerged/ticket-staging/scopedwhitespace0. No new source edits or writeractive; finalcy7a stillblocked pending reviewerintent-met acceptance. Existingmodel notices leftconfigured/unmodified; all firstfailurelogs preserved.
+
+**2026-10-04T18:29:03Z**
+
+Substantive fullslice source+tests ACCEPT bb0a55e8. Parentreadactualartifact/bodies/local245eachliteralgroup, sourcehashesverifiedunchanged test-onlyiteration. ReviewerCURRENTretainedpermanentclean245/245bothmodes; M1runtimefinallydiscardsall andM2indexclearsallsame-servernames each3H1/H2fail/242pass; M3oldFIFO4P1/H2fail/241pass BOTHmodes. 111testlinesadded,0removed; alloriginalassertions/scenarioskept. Everyticketcriterionincludingqueuedremoved/backoff andfailure/replacementnoleftovercredit/no successorclear met. Original19m14+followups continuousbudget; nofurtherwriterneeded. Rawfirstfailure4fixtures andTSnullclosure keptwithdiagnoses. Existing256mergeindex32f1524e43672921f6cea6095e696c01b3948babf13970aeb00b5efeb22c04e4 unchanged, nofilesnewlystaged; genericmissingchangedfilesevidence metadata isNOTsubstantiverejection. Closingimplementationintent ONLY, notgkeb/fullmerge/release. Residualcustomgetterownresultreentrancy andALStransportcontext reason/livetoken gates explicit, notwaived. Proceedapproved separatecy7a exactordered10steps thenFRESHcombinedgkeb sourceacceptance beforeclosure/B76.

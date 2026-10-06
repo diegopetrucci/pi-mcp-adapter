@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { abortable } from "./abort.ts";
 import { combineAbortSignals } from "./runtime-owner.ts";
 import type { McpExtensionState } from "./state.ts";
@@ -24,15 +25,23 @@ export type ToolCallApprovalResult =
 export function isToolCallApprovalRequired(
   config: McpConfig,
   serverName: string,
-  toolMeta: Pick<ToolMetadata, "originalName">,
+  toolMeta: Pick<ToolMetadata, "originalName" | "annotations" | "resourceUri">,
   toolMetadata?: ReadonlyMap<string, readonly ToolMetadata[]>,
 ): boolean {
   const definition = config.mcpServers[serverName];
   const serverApproval = definition?.approveTools;
   const approval = serverApproval !== undefined ? serverApproval : config.settings?.approveTools;
 
-  if (approval === true) return true;
-  if (!Array.isArray(approval) || approval.length === 0) return false;
+  if (approval === undefined || approval === false) return false;
+  // MCP treats a tool as possibly destructive unless it says otherwise; reading a resource never is.
+  if (approval === "destructive") {
+    return toolMeta.resourceUri === undefined
+      && toolMeta.annotations?.readOnlyHint !== true
+      && toolMeta.annotations?.destructiveHint !== false;
+  }
+  // Values from unvalidated sources (imports, runtime registration) fail closed.
+  if (!Array.isArray(approval)) return true;
+  if (approval.length === 0) return false;
 
   const prefix = resolveToolPrefix(definition, config.settings?.toolPrefix);
   const currentCandidates = getToolNameCandidates(toolMeta.originalName, serverName, prefix, false);
@@ -88,15 +97,19 @@ function isMcpToolApprovalDecision(value: unknown): value is McpToolApprovalDeci
     || value === "abstain";
 }
 
-async function requestBrokerApproval(
-  state: McpExtensionState,
+/**
+ * Returns "abstain" when no handler claims the request. A handler that throws
+ * or returns an unknown value counts as "deny". Rethrows only when `signal` aborted.
+ */
+export async function requestBrokerApproval(
+  events: ExtensionAPI["events"] | undefined,
   serverName: string,
-  toolMeta: ToolMetadata,
+  toolMeta: Pick<ToolMetadata, "name" | "originalName">,
   args: Record<string, unknown> | undefined,
   origin: McpToolApprovalOrigin,
   signal?: AbortSignal,
 ): Promise<McpToolApprovalDecision> {
-  if (!state.approvalEvents) return "abstain";
+  if (!events) return "abstain";
 
   let acceptingClaim = true;
   let handler: McpToolApprovalHandler | undefined;
@@ -115,7 +128,7 @@ async function requestBrokerApproval(
     },
   };
 
-  state.approvalEvents.emit(MCP_TOOL_APPROVAL_REQUEST_EVENT, request);
+  events.emit(MCP_TOOL_APPROVAL_REQUEST_EVENT, request);
   acceptingClaim = false;
   if (!handler) return "abstain";
 
@@ -140,7 +153,7 @@ export async function ensureToolCallApproved(
   const ownedSignal = combineAbortSignals(state.owner?.signal, signal);
   const approvedServers = state.approvedServers ??= new Map();
   const serverIdentity = getServerApprovalIdentity(state, serverName);
-  const brokerDecision = await requestBrokerApproval(state, serverName, toolMeta, args, origin, signal);
+  const brokerDecision = await requestBrokerApproval(state.approvalEvents, serverName, toolMeta, args, origin, signal);
   if (brokerDecision === "allow_once") return { ok: true };
   if (brokerDecision === "allow_for_session") {
     rememberToolApproval(state, serverName, toolMeta, args);
@@ -175,10 +188,15 @@ export async function ensureToolCallApproved(
   const sanitized = sanitizeTerminalText(json);
   const preview = sanitized.length > 500 ? `${sanitized.slice(0, 500)}...` : sanitized;
   const title = `MCP: ${sanitizeTerminalText(serverName)} wants to run ${sanitizeTerminalText(toolMeta.originalName)}`;
+  const hint = toolMeta.annotations?.destructiveHint === true
+    ? "\n\nThe server marks this tool as destructive: it may delete or overwrite data."
+    : toolMeta.annotations?.readOnlyHint === true
+      ? "\n\nThe server marks this tool as read-only."
+      : "";
   const serverScope = "Allow server for this session permits all tools and arguments on this server until reload or session/branch change. Other security and UI consent checks still apply.";
   const decision = await abortable(
     state.ui.select(
-      `${title}\n\nArguments:\n${preview}\n\n${serverScope}`,
+      `${title}${hint}\n\nArguments:\n${preview}\n\n${serverScope}`,
       ["Allow once", "Allow for session", "Allow server for this session", "Deny"],
     ),
     ownedSignal,

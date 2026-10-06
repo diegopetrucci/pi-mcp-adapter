@@ -16,6 +16,8 @@
     "metadata-cache.ts",
     "mcp-bearer-store.ts",
     "secure-keyring.ts",
-    "types.ts"
+    "types.ts",
+    "project-server-trust.ts",
+    "server-manager.ts"
   ]
 }
