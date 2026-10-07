@@ -69,7 +69,7 @@ While the built-in is turned on, Pi may warn at startup and `/reload` that it wa
 pi install npm:@diegopetrucci/pi-mcp-adapter@5.0.0
 ```
 
-TLH automation should use this exact pinned install target. The upstream `v5.0.0` tag is only the intake anchor; the fork-owned package identity and version are `@diegopetrucci/pi-mcp-adapter@5.0.0` for bundled tlh integration. Publication, tagging, and PR integration are separate release steps and are not asserted by this documentation.
+TLH automation should use this exact pinned install target. The upstream `v5.0.0` tag is only the intake anchor; the fork-owned package identity and version are `@diegopetrucci/pi-mcp-adapter@5.0.0` for bundled tlh integration. The fork release was integrated through [PR #17](https://github.com/diegopetrucci/pi-mcp-adapter/pull/17) at merge [`a305e43e0abac015e6aeb988b15f1bba23f62e46`](https://github.com/diegopetrucci/pi-mcp-adapter/commit/a305e43e0abac015e6aeb988b15f1bba23f62e46), published through [OIDC workflow run 37613129066](https://github.com/diegopetrucci/pi-mcp-adapter/actions/runs/37613129066), and released as [`tlh-v5.0.0`](https://github.com/diegopetrucci/pi-mcp-adapter/releases/tag/tlh-v5.0.0).
 
 Maintainer note: upstream intake policy for this fork lives in `docs/UPSTREAM-SYNC.md`, with fork-only delta tracking in `docs/tlh-patch-inventory.md`.
 
