@@ -21,6 +21,10 @@ describe("search ranking", () => {
     expect(scoreToolMatch(tool("search_records", "Find records"), "demo", "search missing")).toBeNull();
   });
 
+  it("does not penalize repeated query tokens", () => {
+    expect(scoreToolMatch(tool("search_records", "Find records"), "demo", "search search")).not.toBeNull();
+  });
+
   it("keeps single-character Unicode query terms", () => {
     expect(scoreToolMatch(tool("weather", "天气和雨"), "demo", "雨")).not.toBeNull();
     expect(scoreToolMatch(tool("calendar", "Calendar events"), "demo", "calendar历")).toBeNull();
@@ -101,6 +105,22 @@ describe("search ranking", () => {
     state.toolMetadata.set("demo", [tool("create_record", "Create a record")] as ToolMetadata[]);
     expect(rankToolMatches(state, "search")).toHaveLength(0);
     expect(rankToolMatches(state, "create")).toHaveLength(1);
+  });
+
+  it("matches tools through their server description", () => {
+    const state = {
+      toolMetadata: new Map([
+        ["weather", [tool("get_alerts", "List active alerts")]],
+        ["calendar", [tool("list_events", "List calendar events")]],
+      ]),
+      config: { mcpServers: { weather: { command: "weather" }, calendar: { command: "calendar" } } },
+      manager: { getConnection: () => undefined },
+      failureTracker: new Map(),
+    } as unknown as McpExtensionState;
+
+    expect(rankToolMatches(state, "forecast")).toHaveLength(0);
+    state.config.mcpServers.weather!.description = "Forecasts and severe weather alerts";
+    expect(rankToolMatches(state, "forecast").map(match => match.tool.name)).toEqual(["get_alerts"]);
   });
 
   it("paginates including offsets beyond the result set", () => {

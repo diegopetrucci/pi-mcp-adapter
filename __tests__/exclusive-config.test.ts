@@ -7,7 +7,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   findAvailableImportConfigs,
   getMcpDiscoverySummary,
+  getPiGlobalConfigPath,
+  getServerProvenance,
   loadMcpConfig,
+  writeDirectToolsConfig,
   writeSharedServerEntry,
 } from "../config.ts";
 
@@ -35,6 +38,83 @@ describe("exclusive MCP config", () => {
     expect(JSON.parse(await readFile(destination, "utf8"))).toEqual({ custom: { retained: true }, mcpServers: { prior, ...installed } });
   });
 
+  it("keeps an explicit override read-only while persisting adapter-only changes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-mcp-exclusive-read-only-"));
+    roots.push(root);
+    const agentDir = join(root, "agent");
+    const workspace = join(root, "workspace");
+    const override = join(root, "external.json");
+    const overrideConfig = {
+      mcpServers: {
+        chosen: {
+          url: "https://example.test/mcp",
+          headers: { Authorization: "Bearer secret" },
+          bearerToken: "secret",
+        },
+      },
+    };
+    await Promise.all([
+      writeConfig(join(agentDir, "mcp-adapter.json"), { mcpServers: {} }),
+      writeConfig(override, overrideConfig),
+    ]);
+    vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
+    vi.stubEnv("PI_MCP_CONFIG_MODE", "exclusive");
+
+    const before = await readFile(override, "utf8");
+    const config = loadMcpConfig(override, workspace);
+    writeDirectToolsConfig(
+      new Map([["chosen", true]]),
+      getServerProvenance(override, workspace),
+      config,
+      undefined,
+      workspace,
+    );
+
+    expect(await readFile(override, "utf8")).toBe(before);
+    expect(JSON.parse(await readFile(getPiGlobalConfigPath(undefined, workspace), "utf8"))).toEqual({
+      mcpServers: { chosen: { directTools: true } },
+    });
+    expect(loadMcpConfig(override, workspace).mcpServers.chosen).toEqual({
+      ...overrideConfig.mcpServers.chosen,
+      directTools: true,
+    });
+  });
+
+  it("projects only canonical adapter state over an arbitrary exclusive source", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-mcp-exclusive-overlay-"));
+    roots.push(root);
+    const agentDir = join(root, "agent");
+    const workspace = join(root, "workspace");
+    const override = join(workspace, "external.json");
+    await Promise.all([
+      writeConfig(override, { mcpServers: { chosen: { command: "chosen", url: "https://chosen.example/mcp" } } }),
+      writeConfig(join(workspace, ".vscode", "mcp.json"), { mcpServers: { imported: { command: "imported" } } }),
+      writeConfig(join(agentDir, "mcp-adapter.json"), {
+        imports: ["vscode"],
+        settings: { directTools: true, toolPrefix: "none" },
+        mcpServers: {
+          chosen: { command: "must-not-replace", url: "https://must-not-replace", env: { SECRET: "must-not-copy" }, directTools: ["chosen_tool"], disabled: true },
+          unrelated: { command: "must-not-load", directTools: true },
+        },
+      }),
+    ]);
+    vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
+    vi.stubEnv("PI_MCP_CONFIG_MODE", "exclusive");
+
+    const { getMcpDiscoverySummary, loadMcpConfig } = await import("../config.ts");
+    const config = loadMcpConfig(override, workspace);
+    expect(config.settings).toMatchObject({ directTools: true, toolPrefix: "none" });
+    expect(config.mcpServers).toEqual({
+      chosen: { command: "chosen", url: "https://chosen.example/mcp", directTools: ["chosen_tool"], disabled: true },
+      imported: { command: "imported" },
+    });
+    expect(config.mcpServers).not.toHaveProperty("unrelated");
+    expect(getMcpDiscoverySummary(override, workspace).sources).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "explicit-read-only", kind: "explicit", serverCount: 1 }),
+      expect.objectContaining({ id: "pi-adapter-overlay", kind: "pi", serverCount: 0 }),
+    ]));
+  });
+
   it("loads the private agent config by default and honors an explicit override", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-mcp-exclusive-"));
     roots.push(root);
@@ -42,7 +122,7 @@ describe("exclusive MCP config", () => {
     const workspace = join(root, "workspace");
     const override = join(root, "hostile-override.json");
     await Promise.all([
-      writeConfig(join(agentDir, "mcp.json"), {
+      writeConfig(join(agentDir, "mcp-adapter.json"), {
         imports: ["vscode"],
         mcpServers: { exact_root: { command: "node", args: ["exact-root"] } },
       }),

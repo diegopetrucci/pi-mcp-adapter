@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -113,6 +114,70 @@ describe("commands onboarding", () => {
     expect(loadOnboardingState().sharedConfigHintShown).toBe(true);
   });
 
+  it("persists direct-tools changes in the adapter override without rewriting shared config", async () => {
+    const home = mkdtempSync(join(tmpdir(), "pi-mcp-panel-write-home-"));
+    const project = mkdtempSync(join(tmpdir(), "pi-mcp-panel-write-project-"));
+    const path = join(project, ".mcp.json");
+    process.env.HOME = home;
+    process.chdir(project);
+    writeJson(path, { mcpServers: { demo: { command: "demo" } } });
+    mocks.createMcpPanel.mockImplementationOnce((_config, _cache, _provenance, _callbacks, _tui, done) => {
+      writeFileSync(path, "{ malformed");
+      done({ cancelled: false, changes: new Map([["demo", true]]), disabledChanges: new Map() });
+      return { dispose() {} };
+    });
+
+    const ui = createUi();
+    const refresh = vi.fn();
+    const { openMcpPanel } = await import("../commands.ts");
+    const result = await openMcpPanel({
+      config: { mcpServers: { demo: { command: "demo" } } },
+      manager: { getConnection: () => null },
+      toolMetadata: new Map(),
+      failureTracker: new Map(),
+    } as any, { getFlag: () => undefined } as any, { hasUI: true, mode: "tui", ui, cwd: project } as any, undefined, refresh);
+
+    expect(result.configChanged).toBe(false);
+    expect(readFileSync(path, "utf-8")).toBe("{ malformed");
+    expect(JSON.parse(readFileSync(join(project, ".pi", "mcp-adapter.json"), "utf-8"))).toEqual({
+      mcpServers: { demo: { directTools: true } },
+    });
+    expect(refresh).toHaveBeenCalledWith(new Map([["demo", true]]));
+    expect(ui.notify).toHaveBeenCalledWith("Direct tools updated for this session.", "info");
+  });
+
+  it.skipIf(process.platform === "win32")("writes direct-tools changes to their canonical adapter layers", async () => {
+    const home = mkdtempSync(join(tmpdir(), "pi-mcp-panel-partial-home-"));
+    const project = mkdtempSync(join(tmpdir(), "pi-mcp-panel-partial-project-"));
+    const projectPath = join(project, ".mcp.json");
+    const globalPath = join(home, "external.json");
+    process.env.HOME = home;
+    process.chdir(project);
+    writeJson(projectPath, { mcpServers: { first: { command: "first" } } });
+    writeJson(globalPath, { mcpServers: { second: { command: "second" } } });
+    mocks.createMcpPanel.mockImplementationOnce((_config, _cache, _provenance, _callbacks, _tui, done) => {
+      done({ cancelled: false, changes: new Map([["first", true], ["second", true]]), disabledChanges: new Map() });
+      return { dispose() {} };
+    });
+
+    const ui = createUi();
+    const refresh = vi.fn();
+    const { openMcpPanel } = await import("../commands.ts");
+    const result = await openMcpPanel({
+      config: { mcpServers: { first: { command: "first" }, second: { command: "second" } } },
+      manager: { getConnection: () => null },
+      toolMetadata: new Map(),
+      failureTracker: new Map(),
+    } as any, { getFlag: () => undefined } as any, { hasUI: true, mode: "tui", ui, cwd: project } as any, globalPath, refresh);
+
+    expect(result.configChanged).toBe(false);
+    expect(JSON.parse(readFileSync(join(project, ".pi", "mcp-adapter.json"), "utf-8")).mcpServers.first).toEqual({ directTools: true });
+    expect(JSON.parse(readFileSync(join(home, ".pi", "agent", "mcp-adapter.json"), "utf-8")).mcpServers.second).toEqual({ directTools: true });
+    expect(JSON.parse(readFileSync(globalPath, "utf-8")).mcpServers.second.directTools).toBeUndefined();
+    expect(refresh).toHaveBeenCalledWith(new Map([["first", true], ["second", true]]));
+    expect(ui.notify).toHaveBeenCalledWith("Direct tools updated for this session.", "info");
+  });
+
   it("passes the active theme into the setup MCP panel", async () => {
     process.env.HOME = mkdtempSync(join(tmpdir(), "pi-mcp-commands-setup-theme-home-"));
     const ui = createUi();
@@ -173,8 +238,10 @@ describe("commands onboarding", () => {
 
     expect(mocks.createMcpSetupPanel).toHaveBeenCalled();
     const discovery = mocks.createMcpSetupPanel.mock.calls[0]?.[0];
+    // TLH fork safeguard: .agents sources appear in discovery but are not active (detection-only).
+    // The ConfigDiscoverySource interface doesn't expose 'active'; it is on the spec level only.
     expect(discovery.sources).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "agents-global", serverCount: 1, active: false }),
+      expect.objectContaining({ id: "agents-global", serverCount: 1 }),
     ]));
   });
 
@@ -200,7 +267,7 @@ describe("commands onboarding", () => {
         demo: { command: "demo" },
       },
     });
-    expect(JSON.parse(readFileSync(join(home, ".pi", "agent", "mcp.json"), "utf-8"))).toEqual({
+    expect(JSON.parse(readFileSync(join(home, ".pi", "agent", "mcp-adapter.json"), "utf-8"))).toEqual({
       mcpServers: {
         demo: { directTools: true },
       },
@@ -224,11 +291,11 @@ describe("commands onboarding", () => {
       expect(previews[0]?.path).toBe(join(project, ".mcp.json"));
       expect(previews[0]?.beforeText).toBe("");
       expect(previews[0]?.afterText).not.toContain("directTools");
-      expect(previews[1]?.path).toBe(join(project, ".pi", "mcp.json"));
+      expect(previews[1]?.path).toBe(join(project, ".pi", "mcp-adapter.json"));
       expect(previews[1]?.beforeText).toBe("");
       expect(previews[1]?.afterText).toContain("directTools");
       expect(existsSync(join(project, ".mcp.json"))).toBe(false);
-      expect(existsSync(join(project, ".pi", "mcp.json"))).toBe(false);
+      expect(existsSync(join(project, ".pi", "mcp-adapter.json"))).toBe(false);
       void callbacks.addKnownServer(preset, "project").then(() => done());
       return { dispose() {} };
     });
@@ -240,9 +307,101 @@ describe("commands onboarding", () => {
     expect(JSON.parse(readFileSync(join(project, ".mcp.json"), "utf-8"))).toEqual({
       mcpServers: { "parallel-search": { url: "https://search.parallel.ai/mcp" } },
     });
-    expect(JSON.parse(readFileSync(join(project, ".pi", "mcp.json"), "utf-8"))).toEqual({
+    expect(JSON.parse(readFileSync(join(project, ".pi", "mcp-adapter.json"), "utf-8"))).toEqual({
       mcpServers: { "parallel-search": { directTools: true } },
     });
+  });
+
+  it.each(["project", "global"] as const)("rejects known-server writes before mutating an aliased %s adapter destination", async (target) => {
+    const home = mkdtempSync(join(tmpdir(), `pi-mcp-commands-${target}-alias-home-`));
+    const project = mkdtempSync(join(tmpdir(), `pi-mcp-commands-${target}-alias-project-`));
+    process.env.HOME = home;
+    process.chdir(project);
+
+    const sharedPath = target === "project"
+      ? join(project, ".mcp.json")
+      : join(home, ".config", "mcp", "mcp.json");
+    const adapterPath = target === "project"
+      ? join(project, ".pi", "mcp-adapter.json")
+      : join(home, ".pi", "agent", "mcp-adapter.json");
+    const sharedText = '{\n  "mcpServers": {\n    "existing": { "command": "keep" }\n  }\n}\n';
+    mkdirSync(dirname(sharedPath), { recursive: true });
+    mkdirSync(dirname(adapterPath), { recursive: true });
+    writeFileSync(sharedPath, sharedText, "utf-8");
+    symlinkSync(sharedPath, adapterPath);
+
+    let addKnownServer: ((preset: any, selectedTarget: "project" | "global") => Promise<unknown>) | undefined;
+    mocks.createMcpSetupPanel.mockImplementationOnce((_discovery, callbacks, _options, _tui, done) => {
+      addKnownServer = callbacks.addKnownServer;
+      done();
+      return { dispose() {} };
+    });
+
+    const ui = createUi();
+    const { openMcpSetup } = await import("../commands.ts");
+    const result = await openMcpSetup({ config: { mcpServers: {} } } as any, {} as any, { hasUI: true, mode: "tui", ui, cwd: project } as any);
+    expect(result.configChanged).toBe(false);
+    expect(addKnownServer).toBeDefined();
+
+    const preset = {
+      id: "parallel-search",
+      name: "Parallel Search",
+      summary: "Search",
+      entry: { url: "https://search.parallel.ai/mcp", directTools: true },
+    };
+    await expect(addKnownServer!(preset, target)).rejects.toThrow(/Refusing to write MCP config/);
+    expect(readFileSync(sharedPath, "utf-8")).toBe(sharedText);
+    expect(lstatSync(adapterPath).isSymbolicLink()).toBe(true);
+  });
+
+  async function openSetupInFreshHome(installFigma: boolean) {
+    const home = mkdtempSync(join(tmpdir(), "pi-mcp-commands-figma-home-"));
+    process.env.HOME = home;
+    process.chdir(mkdtempSync(join(tmpdir(), "pi-mcp-commands-figma-project-")));
+    if (installFigma) mkdirSync(join(home, "Applications", "Figma.app"), { recursive: true });
+    const { openMcpSetup } = await import("../commands.ts");
+    await openMcpSetup({ config: { mcpServers: {} } } as any, {} as any, { hasUI: true, mode: "tui", ui: createUi(), cwd: process.cwd() } as any);
+    const [discovery, callbacks] = mocks.createMcpSetupPanel.mock.lastCall!;
+    return { home, callbacks, figma: discovery.knownServerPresets.find(({ id }: { id: string }) => id === "figma") };
+  }
+
+  it.skipIf(existsSync("/Applications/Figma.app"))("does not offer Figma (desktop) when the Figma app is not installed", async () => {
+    expect((await openSetupInFreshHome(false)).figma).toBeUndefined();
+  });
+
+  it("offers Figma (desktop) when installed and reports whether its local server is reachable after adding", async () => {
+    const { home, callbacks, figma } = await openSetupInFreshHome(true);
+    expect((await callbacks.addKnownServer(figma, "global")).ignoredBecause).toBeUndefined();
+    expect(JSON.parse(readFileSync(join(home, ".config", "mcp", "mcp.json"), "utf-8"))).toEqual({
+      mcpServers: { figma: { url: "http://127.0.0.1:3845/mcp", protocolVersion: "auto" } },
+    });
+
+    const server = createServer((socket) => socket.end());
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/mcp`;
+    const localFigma = { ...figma, entry: { ...figma.entry, url } };
+    expect((await callbacks.addKnownServer(localFigma, "global")).reachable).toBe(true);
+    await new Promise((resolve) => server.close(resolve));
+    expect((await callbacks.addKnownServer(localFigma, "global")).reachable).toBe(false);
+  });
+
+  it("says when an added server won't be used", async () => {
+    const { home, callbacks, figma } = await openSetupInFreshHome(true);
+    const projectConfig = join(process.cwd(), ".mcp.json");
+    writeFileSync(projectConfig, JSON.stringify({ mcpServers: { figma: { url: "https://mcp.figma.com/mcp" } } }));
+    expect((await callbacks.addKnownServer(figma, "global")).ignoredBecause)
+      .toBe("another config file also defines figma and takes precedence");
+
+    writeFileSync(projectConfig, JSON.stringify({ mcpServers: { figma: { ...figma.entry, disabled: true } } }));
+    expect((await callbacks.addKnownServer(figma, "global")).ignoredBecause).toBe("another config file disables figma");
+
+    process.env.PI_MCP_CONFIG_MODE = "exclusive";
+    try {
+      expect((await callbacks.addKnownServer(figma, "global")).ignoredBecause)
+        .toBe(`the current config mode doesn't read ${join(home, ".config", "mcp", "mcp.json")}`);
+    } finally {
+      delete process.env.PI_MCP_CONFIG_MODE;
+    }
   });
 
   it("writes RepoPrompt setup choices to the selected global shared config", async () => {

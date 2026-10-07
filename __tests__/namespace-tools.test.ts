@@ -112,10 +112,10 @@ describe("syncNamespaceProxyTools", () => {
     expect(result).toEqual({ specs: [], added: [], updated: [], deactivated: [] });
   });
 
-  it.each([true, false])("deactivates disabled namespace proxies without unregisterTool=%s", async (hasUnregister) => {
+  it.each([true, false])("deactivates disabled namespace proxies with unregisterTool=%s", async (canUnregister) => {
     const { syncNamespaceProxyTools } = await importSync();
     const { pi, registered } = makePi();
-    if (!hasUnregister) delete pi.unregisterTool;
+    if (!canUnregister) delete pi.unregisterTool;
     let activeTools = ["mcp", "mcpScript", "demo_search", "mcp__demo"];
     pi.getActiveTools = vi.fn(() => activeTools);
     pi.setActiveTools = vi.fn((names: string[]) => { activeTools = names; });
@@ -137,8 +137,7 @@ describe("syncNamespaceProxyTools", () => {
     expect(pi.registerTool).not.toHaveBeenCalled();
     expect(result.deactivated).toEqual(["mcp__demo"]);
     expect(activeTools).toEqual(["mcp", "mcpScript", "demo_search"]);
-    expect(registered.has("mcp__demo")).toBe(true);
-    if (hasUnregister) expect(pi.unregisterTool).not.toHaveBeenCalled();
+    if (canUnregister) expect(registered.has("mcp__demo")).toBe(false);
   });
 
   it("registers proxy-only servers that expose only resources", async () => {
@@ -395,8 +394,7 @@ describe("syncNamespaceProxyTools", () => {
       getPiTools: () => [],
     });
 
-    expect(registered.has("mcp__context_mode")).toBe(true);
-    expect(unregistered).toEqual([]);
+    expect(unregistered).toContain("mcp__context_mode");
   });
 
   it("deactivates stale namespace proxies when hidden direct tools reserve their names", async () => {
@@ -416,8 +414,8 @@ describe("syncNamespaceProxyTools", () => {
       getPiTools: () => [],
     });
 
-    expect(registered.has("mcp__demo_search")).toBe(true);
-    expect(unregistered).toEqual([]);
+    expect(registered.has("mcp__demo_search")).toBe(false);
+    expect(unregistered).toContain("mcp__demo_search");
   });
 
   it("keeps active direct tools when they replace stale namespace proxy names", async () => {
@@ -442,12 +440,13 @@ describe("syncNamespaceProxyTools", () => {
     expect(unregistered).not.toContain("mcp__demo_search");
   });
 
-  it("reactivates only adapter-owned namespace removals", async () => {
+  it("reactivates fallback-deactivated namespace proxies after re-enabling (no unregisterTool)", async () => {
+    // Uses fallbackDeactivatedNames to track adapter-removed tools (via setActiveTools fallback path).
     const { syncNamespaceProxyTools } = await importSync();
     const { pi, registered } = makePi();
+    delete pi.unregisterTool; // No unregisterTool → uses setActiveTools fallback path
     let activeTools = ["bash", "mcp__demo"];
-    const adapterDeactivatedNames = new Set<string>();
-    const userDeactivatedNames = new Set<string>();
+    const fallbackDeactivatedNames = new Set<string>();
     pi.getActiveTools = vi.fn(() => activeTools);
     pi.setActiveTools = vi.fn((next: string[]) => { activeTools = next; });
     registered.set("mcp__demo", { name: "mcp__demo", execute: vi.fn() });
@@ -456,37 +455,29 @@ describe("syncNamespaceProxyTools", () => {
       envOverride: null,
       existingDirectNames: new Set<string>(),
       existingNamespaceNames: new Set(["mcp__demo"]),
-      adapterDeactivatedNames,
-      userDeactivatedNames,
+      fallbackDeactivatedNames,
       pi,
       getState: () => null,
       getInitPromise: () => null,
       getPiTools: () => [],
     };
+    // Disable namespace tools: mcp__demo deactivated via setActiveTools (fallback path)
     syncNamespaceProxyTools({
       ...common,
       config: { mcpServers: { demo: { command: "demo" } }, settings: { namespaceProxyTools: false } },
       cache: CACHE_SHAPE([["demo", { tools: [{ name: "search" }] }]]),
     });
     expect(activeTools).toEqual(["bash"]);
-    expect(adapterDeactivatedNames).toContain("mcp__demo");
+    expect(fallbackDeactivatedNames).toContain("mcp__demo");
 
+    // Re-enable namespace tools: mcp__demo should be re-added to activeTools
     syncNamespaceProxyTools({
       ...common,
       config: { mcpServers: { demo: { command: "demo" } }, settings: { namespaceProxyTools: true } },
       cache: CACHE_SHAPE([["demo", { tools: [{ name: "search" }] }]]),
     });
     expect(activeTools).toContain("mcp__demo");
-    expect(adapterDeactivatedNames).not.toContain("mcp__demo");
-
-    activeTools = ["bash"];
-    userDeactivatedNames.add("mcp__demo");
-    syncNamespaceProxyTools({
-      ...common,
-      config: { mcpServers: { demo: { command: "demo" } }, settings: { namespaceProxyTools: true } },
-      cache: CACHE_SHAPE([["demo", { tools: [{ name: "search" }] }]]),
-    });
-    expect(activeTools).toEqual(["bash"]);
+    expect(fallbackDeactivatedNames).not.toContain("mcp__demo");
   });
 
   it("removes stale namespace proxies from active tools without unregisterTool", async () => {
@@ -515,11 +506,15 @@ describe("syncNamespaceProxyTools", () => {
     expect(activeTools).toEqual(["bash"]);
   });
 
-  it("reactivates namespace proxies after backoff removal and recovery", async () => {
+  it("reactivates namespace proxies after backoff removal and recovery (no unregisterTool)", async () => {
+    // Without unregisterTool, deactivation uses setActiveTools (fallback path).
+    // fallbackDeactivatedNames tracks what was removed so re-registration can restore it.
     const { syncNamespaceProxyTools } = await importSync();
     const { pi, registered } = makePi();
+    delete pi.unregisterTool; // use fallback path
     let activeTools = ["bash"];
     const names = new Set<string>();
+    const fallbackDeactivatedNames = new Set<string>();
     pi.getActiveTools = vi.fn(() => activeTools);
     pi.setActiveTools = vi.fn((nextActiveTools: string[]) => { activeTools = nextActiveTools; });
 
@@ -531,6 +526,7 @@ describe("syncNamespaceProxyTools", () => {
         existingDirectNames: new Set(),
         existingNamespaceNames: names,
         unavailableServers,
+        fallbackDeactivatedNames,
         pi,
         getState: () => null,
         getInitPromise: () => null,
@@ -541,14 +537,22 @@ describe("syncNamespaceProxyTools", () => {
       return result;
     };
 
+    // First sync: register mcp__demo. In real Pi, registerTool adds to activeTools;
+    // simulate by pre-setting activeTools after the first sync.
     expect(sync(new Set()).added).toEqual(["mcp__demo"]);
-    expect(activeTools).toEqual(["bash", "mcp__demo"]);
+    activeTools = ["bash", "mcp__demo"]; // simulate Pi adding registered tool to activeTools
+    expect(registered.has("mcp__demo")).toBe(true);
+
+    // Backoff: mcp__demo deactivated via setActiveTools (fallback path without unregisterTool)
     expect(sync(new Set(["demo"])).deactivated).toEqual(["mcp__demo"]);
     expect(activeTools).toEqual(["bash"]);
+    expect(fallbackDeactivatedNames).toContain("mcp__demo");
+
+    // Recovery: re-registers mcp__demo and restores it to activeTools via fallbackDeactivatedNames
     expect(sync(new Set()).added).toEqual(["mcp__demo"]);
     expect(activeTools).toEqual(["bash", "mcp__demo"]);
+    expect(fallbackDeactivatedNames).not.toContain("mcp__demo");
     expect(registered.has("mcp__demo")).toBe(true);
-    expect(pi.unregisterTool).not.toHaveBeenCalled();
   });
 
   it("skips colliding normalized server names without choosing by config order", async () => {

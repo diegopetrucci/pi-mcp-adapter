@@ -3,8 +3,11 @@ import { existsSync, realpathSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import stripJsonComments from "strip-json-comments";
+export function stripUtf8Bom(raw) {
+    return raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+}
 export function parseJsonWithComments(raw) {
-    return JSON.parse(stripJsonComments(raw, { trailingCommas: true }));
+    return JSON.parse(stripJsonComments(stripUtf8Bom(raw), { trailingCommas: true }));
 }
 /** Resolve a candidate only when its real path stays within the real root. */
 export function resolveRealContainedPath(root, candidate, allowMissing = false) {
@@ -220,11 +223,18 @@ export function resolveServerUrl(definition, environment = process.env) {
 export function resolveConfigPath(value, environment = process.env) {
     if (value === undefined)
         return undefined;
-    const resolved = interpolateEnvVars(value, environment);
+    return expandHomePath(interpolateEnvVars(value, environment));
+}
+/** Expand a leading home-directory marker without interpolating environment variables. */
+export function expandHomePath(value) {
+    if (value === undefined)
+        return undefined;
+    const resolved = value;
     if (resolved === "~")
         return homedir();
-    if (resolved.startsWith("~/") || resolved.startsWith("~\\")) {
-        return join(homedir(), resolved.slice(2));
+    if (resolved.startsWith("~/") || (platform() === "win32" && resolved.startsWith("~\\"))) {
+        const suffix = platform() === "win32" ? resolved.slice(2).replace(/[\\/]/g, sep) : resolved.slice(2);
+        return join(homedir(), suffix);
     }
     return resolved;
 }
@@ -305,6 +315,13 @@ export function truncateAtWord(text, target) {
     }
     return truncated + "...";
 }
+/** Request `_meta` key that lets MCP servers correlate a call with the Pi tool call that made it. */
+export const TOOL_CALL_ID_REQUEST_META_KEY = "pi-mcp-adapter/toolCallId";
+export function withToolCallIdMeta(meta, toolCallId) {
+    if (!toolCallId)
+        return meta;
+    return { ...meta, [TOOL_CALL_ID_REQUEST_META_KEY]: toolCallId };
+}
 export function normalizeDirectToolInputSchema(schema) {
     const inputSchema = schema && typeof schema === "object" && !Array.isArray(schema)
         ? schema
@@ -378,8 +395,24 @@ function assertJsonSerializable(value, context, path = "") {
     throw new Error(`${context}: value at ${path || "root"} is not JSON-serializable`);
 }
 export function formatAuthRequiredMessage(config, serverName, defaultMessage) {
+    const auth = config.mcpServers[serverName]?.auth;
+    if (typeof auth === "object")
+        return providerSignInMessage(serverName, auth.provider);
     const template = config.settings?.authRequiredMessage;
     return template ? template.replaceAll("${server}", serverName) : defaultMessage;
+}
+/** Servers with `auth.provider` sign in through Pi, never through MCP OAuth. */
+export function providerSignInMessage(serverName, provider) {
+    return `MCP server "${serverName}" needs sign-in. Run /login ${provider}, then /mcp-adapter reconnect ${serverName}.`;
+}
+/** Why a server must not receive its `auth.provider` token at `url`, or undefined when it may. */
+export function providerAuthUrlError(url) {
+    const parsed = URL.canParse(url) ? new URL(url) : undefined;
+    if (parsed?.protocol === "https:")
+        return undefined;
+    if (parsed?.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname))
+        return undefined;
+    return "auth.provider requires an https URL, or http on localhost, 127.0.0.1, or [::1]";
 }
 export function formatMcpStatus(config, message) {
     if (config.settings?.mcpFooterStatus === "off")
@@ -411,5 +444,22 @@ export function extractToolUiStreamMode(toolMeta) {
         return streamMode;
     }
     return undefined;
+}
+/**
+ * Keep only the spec tool annotations with the right types. Server and cache
+ * input is untrusted, so a malformed field is dropped instead of failing the tool list.
+ */
+export function extractToolAnnotations(annotations) {
+    if (!annotations || typeof annotations !== "object")
+        return undefined;
+    const source = annotations;
+    const kept = {};
+    if (typeof source.title === "string")
+        kept.title = source.title;
+    for (const key of ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"]) {
+        if (typeof source[key] === "boolean")
+            kept[key] = source[key];
+    }
+    return Object.keys(kept).length > 0 ? kept : undefined;
 }
 //# sourceMappingURL=utils.js.map

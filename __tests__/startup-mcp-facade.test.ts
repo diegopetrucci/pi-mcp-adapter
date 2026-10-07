@@ -64,6 +64,7 @@ describe("startup MCP facade support", () => {
     expect(resolveDirectTools(searchConfig, cache, "server", undefined, "/repo/session")).toMatchObject([
       { prefixedName: "search_lookup", lazy: true },
     ]);
+    expect(resolveDirectTools(searchConfig, cache, "server", undefined, "/repo/other")).toEqual([]);
     expect(resolveDirectTools({ mcpServers: { search: { ...searchDefinition, directTools: undefined } } }, cache, "server", undefined, "/repo/session")).toEqual([]);
   });
 

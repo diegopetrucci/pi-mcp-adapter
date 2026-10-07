@@ -79,6 +79,7 @@ function resolveNamespaceProxyTools(
   unavailableServers: ReadonlySet<string>,
   defaultCwd?: string,
 ): NamespaceProxySpec[] {
+  // TLH fork safeguard: namespace proxy tools default OFF; must be explicitly enabled.
   if (!config || !cache || config.settings?.namespaceProxyTools !== true) return [];
   return filterCollidingNamespaceProxyTools(
     Object.keys(config.mcpServers)
@@ -105,6 +106,8 @@ export type ExecuteNamespaceCall = (
   getPiTools: GetPiTools,
   signal: AbortSignal | undefined,
   origin: "proxy",
+  internalDelivery: undefined,
+  toolCallId: string,
 ) => Promise<AgentToolResult<Record<string, unknown>>>;
 
 function namespaceExecute(
@@ -116,7 +119,7 @@ function namespaceExecute(
   getPiTools: GetPiTools,
 ) {
   return async (
-    _toolCallId: string,
+    toolCallId: string,
     params: { tool?: string; args?: Record<string, unknown> },
     signal: AbortSignal | undefined,
     _onUpdate: unknown,
@@ -168,6 +171,8 @@ function namespaceExecute(
       getPiTools,
       signal,
       "proxy",
+      undefined,
+      toolCallId,
     );
   };
 }
@@ -187,13 +192,13 @@ export interface SyncNamespaceProxyToolsInput {
   existingDirectNames: Set<string>;
   activeDirectNames?: ReadonlySet<string>;
   existingNamespaceNames: Set<string>;
-  /** Tool names removed from Pi's active loadout by this adapter. */
-  adapterDeactivatedNames?: Set<string>;
-  /** Tool names removed from Pi's active loadout by the user. */
-  userDeactivatedNames?: ReadonlySet<string>;
   unavailableServers?: ReadonlySet<string>;
   /** Session cwd used when validating command-server cache identity. */
   defaultCwd?: string;
+  // Names the adapter removed from Pi's active tools because Pi could not
+  // unregister them. Pi does not re-activate a name it already knows, so a
+  // later re-registration must add the name back.
+  fallbackDeactivatedNames?: Set<string>;
   pi: ExtensionAPI;
   getState: GetState;
   getInitPromise: GetInitPromise;
@@ -269,9 +274,19 @@ function registerNamespaceProxyTool(
     ),
   });
   input.guardReentrant?.();
+  if (input.fallbackDeactivatedNames?.delete(spec.toolName)) {
+    // Only undo a fallback deactivation the adapter still owns.
+    input.guardReentrant?.();
+    const activeTools = getActiveToolsIfReady(input.pi);
+    input.guardReentrant?.();
+    if (activeTools && !activeTools.includes(spec.toolName)) {
+      input.pi.setActiveTools([...activeTools, spec.toolName]);
+      input.guardReentrant?.();
+    }
+  }
 }
 
-function getActiveToolsForSync(pi: ExtensionAPI): string[] | undefined {
+function getActiveToolsIfReady(pi: ExtensionAPI): string[] | undefined {
   try {
     return pi.getActiveTools?.();
   } catch (error) {
@@ -280,35 +295,44 @@ function getActiveToolsForSync(pi: ExtensionAPI): string[] | undefined {
   }
 }
 
-function syncNamespaceToolActivity(input: SyncNamespaceProxyToolsInput, nextNames: Set<string>): string[] {
-  const activeDirectNames = input.activeDirectNames ?? new Set<string>();
-  const adapterDeactivatedNames = input.adapterDeactivatedNames;
-  const userDeactivatedNames = input.userDeactivatedNames;
-  const staleNames = [...input.existingNamespaceNames].filter(name => !nextNames.has(name));
-  const activeTools = getActiveToolsForSync(input.pi);
-  if (!activeTools) return staleNames;
+function getActiveToolsForStaleCleanup(pi: ExtensionAPI, staleNames: string[]): string[] | undefined {
+  if (staleNames.length === 0) return undefined;
+  return getActiveToolsIfReady(pi);
+}
 
-  const managedNamespaceNames = new Set([...input.existingNamespaceNames, ...nextNames]);
-  const nextActiveTools = activeTools.filter((name) => {
-    if (!managedNamespaceNames.has(name) || activeDirectNames.has(name)) return true;
-    if (nextNames.has(name) && !userDeactivatedNames?.has(name)) return true;
-    adapterDeactivatedNames?.add(name);
-    return false;
-  });
-  for (const name of nextNames) {
-    const mayReactivate = (adapterDeactivatedNames === undefined || adapterDeactivatedNames.has(name))
-      && !userDeactivatedNames?.has(name);
-    if (!activeDirectNames.has(name) && !nextActiveTools.includes(name) && mayReactivate) {
-      nextActiveTools.push(name);
-      adapterDeactivatedNames?.delete(name);
-    }
-  }
-  if (nextActiveTools.length !== activeTools.length || nextActiveTools.some((name, index) => name !== activeTools[index])) {
+function deactivateStaleNamespaceTools(input: SyncNamespaceProxyToolsInput, nextNames: Set<string>): string[] {
+  const activeDirectNames = input.activeDirectNames ?? new Set<string>();
+  const staleNames = [...input.existingNamespaceNames].filter(
+    (name) => !nextNames.has(name) && !activeDirectNames.has(name),
+  );
+  const deactivated: string[] = [];
+  const unregisterTool = (input.pi as unknown as {
+    unregisterTool?: (name: string) => boolean;
+  }).unregisterTool;
+  for (const stale of staleNames) {
     input.guardReentrant?.();
-    input.pi.setActiveTools(nextActiveTools);
+    const removed = unregisterTool?.(stale);
     input.guardReentrant?.();
+    if (removed) deactivated.push(stale);
   }
-  return staleNames;
+  input.guardReentrant?.();
+  const activeTools = getActiveToolsForStaleCleanup(input.pi, staleNames);
+  input.guardReentrant?.();
+  if (!activeTools) return deactivated;
+
+  const stale = new Set(staleNames);
+  const fallbackRemoved = staleNames.filter((name) => !deactivated.includes(name) && activeTools.includes(name));
+  const nextActiveTools = activeTools.filter((name) => !stale.has(name));
+  if (nextActiveTools.length === activeTools.length) return deactivated;
+
+  input.guardReentrant?.();
+  input.pi.setActiveTools(nextActiveTools);
+  input.guardReentrant?.();
+  for (const name of fallbackRemoved) input.fallbackDeactivatedNames?.add(name);
+  for (const name of staleNames) {
+    if (!deactivated.includes(name)) deactivated.push(name);
+  }
+  return deactivated;
 }
 
 /**
@@ -334,7 +358,7 @@ export function syncNamespaceProxyTools(input: SyncNamespaceProxyToolsInput): Sy
     (input.existingNamespaceNames.has(spec.toolName) ? result.updated : result.added).push(spec.toolName);
   }
 
-  result.deactivated.push(...syncNamespaceToolActivity(input, nextNames));
+  result.deactivated.push(...deactivateStaleNamespaceTools(input, nextNames));
 
   return result;
 }

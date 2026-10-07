@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   updateStatusBar: vi.fn(),
   flushMetadataCache: vi.fn(),
   initializeOAuth: vi.fn().mockResolvedValue(undefined),
+  createOAuthRuntime: vi.fn((signal: AbortSignal) => ({ signal })),
   shutdownOAuth: vi.fn().mockResolvedValue(undefined),
   createDirectToolExecutor: vi.fn(),
   showStatus: vi.fn(),
@@ -35,6 +36,7 @@ vi.mock("../init.ts", () => ({
 
 vi.mock("../mcp-auth-flow.ts", () => ({
   initializeOAuth: mocks.initializeOAuth,
+  createOAuthRuntime: mocks.createOAuthRuntime,
   shutdownOAuth: mocks.shutdownOAuth,
 }));
 
@@ -107,12 +109,89 @@ describe("mcp runtime", () => {
     }
 
     mocks.initializeOAuth.mockResolvedValue(undefined);
+    mocks.createOAuthRuntime.mockImplementation((signal: AbortSignal) => ({ signal }));
     mocks.shutdownOAuth.mockResolvedValue(undefined);
     mocks.createDirectToolExecutor.mockReturnValue(vi.fn().mockResolvedValue({ content: [] }));
   });
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("awaits predecessor cleanup before normal successor initialization", async () => {
+    const firstState = createState();
+    const cleanup = createDeferred<void>();
+    firstState.lifecycle.gracefulShutdown.mockReturnValue(cleanup.promise);
+    const secondState = createState();
+    mocks.initializeMcp.mockResolvedValueOnce(firstState).mockResolvedValueOnce(secondState);
+
+    const { createMcpRuntime } = await import("../mcp-runtime.ts");
+    const runtime = createMcpRuntime(createPi(), {});
+
+    await runtime.handleSessionStart({}, {} as any);
+    await runtime.waitForInitialization?.();
+
+    const replacement = runtime.handleSessionStart({}, {} as any);
+    await vi.waitFor(() => expect(firstState.lifecycle.gracefulShutdown).toHaveBeenCalledTimes(1));
+    expect(mocks.initializeMcp).toHaveBeenCalledTimes(1);
+
+    cleanup.resolve();
+    await replacement;
+    expect(mocks.initializeMcp).toHaveBeenCalledTimes(2);
+    expect(mocks.updateStatusBar).toHaveBeenCalledWith(secondState);
+  });
+
+  it("allows one explicit first-use expedite without stale publication", async () => {
+    const firstState = createState();
+    const cleanup = createDeferred<void>();
+    firstState.lifecycle.gracefulShutdown.mockReturnValue(cleanup.promise);
+    const secondState = createState();
+    mocks.initializeMcp.mockResolvedValueOnce(firstState).mockResolvedValueOnce(secondState);
+
+    const { createMcpRuntime } = await import("../mcp-runtime.ts");
+    const runtime = createMcpRuntime(createPi(), {});
+
+    await runtime.handleSessionStart({}, {} as any);
+    await runtime.waitForInitialization?.();
+    mocks.updateStatusBar.mockClear();
+    const replacement = runtime.handleSessionStart({}, {} as any);
+    await vi.waitFor(() => expect(firstState.lifecycle.gracefulShutdown).toHaveBeenCalledTimes(1));
+
+    expect(runtime.expediteSessionStart?.()).toBe(true);
+    expect(runtime.expediteSessionStart?.()).toBe(false);
+    await vi.waitFor(() => expect(mocks.initializeMcp).toHaveBeenCalledTimes(2));
+    expect(firstState.lifecycle.gracefulShutdown).toHaveBeenCalledTimes(1);
+    expect(mocks.updateStatusBar).not.toHaveBeenCalledWith(firstState);
+
+    cleanup.resolve();
+    await replacement;
+    expect(mocks.updateStatusBar).toHaveBeenCalledWith(secondState);
+  });
+
+  it("keeps replacement generations behind cleanup and initializes only the winner", async () => {
+    const firstState = createState();
+    const cleanup = createDeferred<void>();
+    firstState.lifecycle.gracefulShutdown.mockReturnValue(cleanup.promise);
+    const secondState = createState();
+    mocks.initializeMcp.mockResolvedValueOnce(firstState).mockResolvedValueOnce(secondState);
+
+    const { createMcpRuntime } = await import("../mcp-runtime.ts");
+    const runtime = createMcpRuntime(createPi(), {});
+
+    await runtime.handleSessionStart({}, {} as any);
+    await runtime.waitForInitialization?.();
+    mocks.updateStatusBar.mockClear();
+    const secondStart = runtime.handleSessionStart({}, {} as any);
+    await vi.waitFor(() => expect(firstState.lifecycle.gracefulShutdown).toHaveBeenCalledTimes(1));
+    const thirdStart = runtime.handleSessionStart({}, {} as any);
+
+    expect(mocks.initializeMcp).toHaveBeenCalledTimes(1);
+    cleanup.resolve();
+    await Promise.all([secondStart, thirdStart]);
+
+    expect(mocks.initializeMcp).toHaveBeenCalledTimes(2);
+    expect(mocks.updateStatusBar).not.toHaveBeenCalledWith(firstState);
+    expect(mocks.updateStatusBar).toHaveBeenCalledWith(secondState);
   });
 
   it("starts a replacement init immediately and shuts down stale init results", async () => {
@@ -127,11 +206,14 @@ describe("mcp runtime", () => {
 
     await runtime.handleSessionStart({}, {} as any);
     expect(mocks.initializeMcp).toHaveBeenCalledTimes(1);
-    expect(mocks.shutdownOAuth).toHaveBeenCalledTimes(1);
+    expect(mocks.shutdownOAuth).not.toHaveBeenCalled();
 
     await runtime.handleSessionStart({}, {} as any);
     expect(mocks.initializeMcp).toHaveBeenCalledTimes(2);
-    expect(mocks.shutdownOAuth).toHaveBeenCalledTimes(2);
+    expect(mocks.shutdownOAuth).toHaveBeenCalledTimes(1);
+    const previousOAuthRuntime = mocks.createOAuthRuntime.mock.results[0].value;
+    expect(mocks.shutdownOAuth).toHaveBeenCalledWith(previousOAuthRuntime);
+    expect(previousOAuthRuntime.signal.aborted).toBe(true);
 
     const activeState = createState();
     second.resolve(activeState);
@@ -194,14 +276,15 @@ describe("mcp runtime", () => {
     await runtime.handleMcpCommand("logout oauth-server", ctx);
     await runtime.handleMcpCommand("", ctx);
 
-    expect(mocks.reconnectServers).toHaveBeenCalledWith(state, ctx, "demo");
-    expect(mocks.showTools).toHaveBeenCalledWith(state, ctx);
-    expect(mocks.openMcpSetup).toHaveBeenCalledWith(state, expect.any(Object), ctx, "/tmp/mcp.json", "setup");
+    const ownerCtx = expect.objectContaining({ hasUI: true, signal: expect.any(AbortSignal), ui: ctx.ui });
+    expect(mocks.reconnectServers).toHaveBeenCalledWith(state, ownerCtx, "demo");
+    expect(mocks.showTools).toHaveBeenCalledWith(state, ownerCtx);
+    expect(mocks.openMcpSetup).toHaveBeenCalledWith(state, expect.any(Object), ownerCtx, "/tmp/mcp.json", "setup");
     expect(ctx.reload).toHaveBeenCalledTimes(3);
-    expect(mocks.editSharedConfig).toHaveBeenNthCalledWith(1, ctx, "project");
-    expect(mocks.editSharedConfig).toHaveBeenNthCalledWith(2, ctx, "global");
-    expect(mocks.logoutServer).toHaveBeenCalledWith("oauth-server", state, ctx);
-    expect(mocks.openMcpPanel).toHaveBeenCalledWith(state, expect.any(Object), ctx, "/tmp/mcp.json", expect.any(Function));
+    expect(mocks.editSharedConfig).toHaveBeenNthCalledWith(1, ownerCtx, "project");
+    expect(mocks.editSharedConfig).toHaveBeenNthCalledWith(2, ownerCtx, "global");
+    expect(mocks.logoutServer).toHaveBeenCalledWith("oauth-server", state, ownerCtx);
+    expect(mocks.openMcpPanel).toHaveBeenCalledWith(state, expect.any(Object), ownerCtx, "/tmp/mcp.json", expect.any(Function));
   });
 
   it("routes mcp-auth commands through the existing auth handlers", async () => {
@@ -220,7 +303,47 @@ describe("mcp runtime", () => {
     await runtime.handleMcpAuthCommand("github", ctx);
 
     expect(mocks.openMcpAuthPanel).toHaveBeenCalledWith(state, expect.any(Object), ctx, "/tmp/mcp.json");
-    expect(mocks.authenticateServer).toHaveBeenCalledWith("github", state.config, ctx);
+    expect(mocks.authenticateServer).toHaveBeenCalledWith(
+      "github",
+      state.config,
+      expect.objectContaining({ hasUI: true, signal: expect.any(AbortSignal) }),
+      expect.any(AbortSignal),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it("retains each session's script selection through initialization and refresh", async () => {
+    const firstState = createState();
+    firstState.config = { settings: { scriptMode: false }, mcpServers: { demo: { command: "demo" } } };
+    const secondState = createState();
+    secondState.config = { settings: { scriptMode: true }, mcpServers: { demo: { command: "demo" } } };
+    mocks.initializeMcp.mockResolvedValueOnce(firstState).mockResolvedValueOnce(secondState);
+    const sync = vi.fn();
+
+    const { createMcpRuntime } = await import("../mcp-runtime.ts");
+    const runtime = createMcpRuntime(createPi(), {
+      startupConfig: { settings: { scriptMode: false }, mcpServers: {} },
+      toolSurface: { sync, activateSearchMatches: vi.fn() },
+    });
+    const ctx = { hasUI: false, cwd: "/session" } as any;
+
+    await runtime.handleSessionStart({}, ctx, { scriptMode: true });
+    await runtime.waitForInitialization?.();
+    expect(firstState.scriptTool).toBe(true);
+    expect(sync.mock.calls[0]?.[4]).toMatchObject({ scriptMode: true });
+
+    await firstState.onToolMetadataUpdated?.("demo", "connect");
+    expect(sync.mock.calls.at(-1)?.[4]).toMatchObject({ scriptMode: true });
+    expect(sync.mock.calls.at(-1)?.[4]?.discoverDirectToolServers).toEqual(new Set(["demo"]));
+
+    await runtime.handleSessionStart({}, ctx, { scriptMode: false });
+    await runtime.waitForInitialization?.();
+    expect(secondState.scriptTool).toBe(false);
+    expect(sync.mock.calls.at(-1)?.[4]).toMatchObject({ scriptMode: false });
+
+    await secondState.onToolMetadataUpdated?.("demo", "connect");
+    expect(sync.mock.calls.at(-1)?.[4]).toMatchObject({ scriptMode: false });
+    expect(sync.mock.calls.at(-1)?.[4]?.discoverDirectToolServers).toEqual(new Set(["demo"]));
   });
 
   it("refreshes direct tools after a persisted panel change even when direct tools are frozen", async () => {
@@ -250,7 +373,45 @@ describe("mcp runtime", () => {
     await applyChanges(new Map([["demo", ["search"]]]));
 
     expect(state.config.mcpServers.demo.directTools).toEqual(["search"]);
-    expect(sync).toHaveBeenNthCalledWith(2, state, ctx, false, expect.any(Object), { forceDirectTools: true });
+    expect(sync).toHaveBeenNthCalledWith(
+      2,
+      state,
+      expect.objectContaining({ hasUI: true, signal: expect.any(AbortSignal) }),
+      false,
+      expect.any(Object),
+      { forceDirectTools: true, forceDirectToolServers: new Set(["demo"]), scriptMode: false },
+    );
+  });
+
+  it("does not refresh for an empty or unrecognized panel change set", async () => {
+    const state = createState();
+    state.config = {
+      settings: { freezeDirectTools: true },
+      mcpServers: { demo: { command: "demo", directTools: false } },
+    };
+    mocks.initializeMcp.mockResolvedValue(state);
+    const sync = vi.fn();
+    const toolSurface = { sync, activateSearchMatches: vi.fn() };
+    let applyChanges!: (changes: Map<string, true | string[] | false>) => void | Promise<void>;
+    mocks.openMcpPanel.mockImplementation(async (...args: any[]) => {
+      applyChanges = args[4];
+      return { configChanged: false };
+    });
+
+    const { createMcpRuntime } = await import("../mcp-runtime.ts");
+    const runtime = createMcpRuntime(createPi(), { toolSurface });
+    const ctx = { hasUI: true, ui: { notify: vi.fn() } } as any;
+
+    await runtime.handleSessionStart({}, ctx);
+    await runtime.waitForInitialization?.();
+    await runtime.handleMcpCommand("", ctx);
+    const syncCalls = sync.mock.calls.length;
+
+    await applyChanges(new Map());
+    await applyChanges(new Map([["runtime-only", true]]));
+
+    expect(sync).toHaveBeenCalledTimes(syncCalls);
+    expect(state.config.mcpServers.demo.directTools).toBe(false);
   });
 
   it("ignores a panel refresh callback after the runtime session is replaced", async () => {
@@ -284,6 +445,44 @@ describe("mcp runtime", () => {
     expect(firstState.config.mcpServers.demo.directTools).toBe(false);
     expect(replacementState.config.mcpServers.demo.directTools).toBe(false);
     expect(sync).toHaveBeenCalledTimes(2);
+  });
+
+  it("discards failed connect attribution before a successor can consume it", async () => {
+    const state = createState();
+    mocks.initializeMcp.mockResolvedValue(state);
+    const firstAttribution = {};
+    const secondAttribution = {};
+    const beginDirectToolAttribution = vi.fn()
+      .mockReturnValueOnce(firstAttribution)
+      .mockReturnValueOnce(secondAttribution);
+    const consumeDirectToolNames = vi.fn(() => ["demo_new"]);
+    const discardDirectToolAttribution = vi.fn();
+    const toolSurface = {
+      sync: vi.fn(),
+      activateSearchMatches: vi.fn(),
+      beginDirectToolAttribution,
+      consumeDirectToolNames,
+      discardDirectToolAttribution,
+    };
+    const connectResult = { content: [{ type: "text", text: "connected" }] };
+    mocks.executeConnect.mockRejectedValueOnce(new Error("cancelled"))
+      .mockResolvedValueOnce(connectResult);
+
+    const { createMcpRuntime } = await import("../mcp-runtime.ts");
+    const runtime = createMcpRuntime(createPi(), { toolSurface });
+    await runtime.handleSessionStart({}, {} as any);
+    await runtime.waitForInitialization?.();
+
+    await expect(runtime.executeProxyTool("cancelled", { connect: "demo" })).rejects.toThrow("cancelled");
+    const result = await runtime.executeProxyTool("success", { connect: "demo" });
+
+    expect(result).toMatchObject({ addedToolNames: ["demo_new"] });
+    expect(beginDirectToolAttribution).toHaveBeenNthCalledWith(1, "demo");
+    expect(beginDirectToolAttribution).toHaveBeenNthCalledWith(2, "demo");
+    expect(consumeDirectToolNames).toHaveBeenCalledTimes(1);
+    expect(consumeDirectToolNames).toHaveBeenCalledWith("demo", secondAttribution);
+    expect(discardDirectToolAttribution).toHaveBeenCalledWith(firstAttribution);
+    expect(discardDirectToolAttribution).toHaveBeenCalledWith(secondAttribution);
   });
 
   it("routes proxy calls through the existing proxy handlers", async () => {
@@ -323,11 +522,21 @@ describe("mcp runtime", () => {
 
     expect(mocks.executeAuthStart).toHaveBeenCalledWith(state, "demo");
     expect(mocks.executeAuthComplete).toHaveBeenCalledWith(state, "demo", "http://localhost/callback?code=abc");
-    expect(mocks.executeCall).toHaveBeenCalledWith(state, "demo_search", { q: "term" }, "demo", expect.any(Function), controller.signal);
+    expect(mocks.executeCall).toHaveBeenCalledWith(
+      state,
+      "demo_search",
+      { q: "term" },
+      "demo",
+      expect.any(Function),
+      controller.signal,
+      undefined,
+      undefined,
+      "call-3",
+    );
     expect(mocks.executeCall.mock.calls[0][4]()).toEqual(pi.getAllTools());
     expect(mocks.executeConnect).toHaveBeenCalledWith(state, "demo", controller.signal);
-    expect(mocks.executeDescribe).toHaveBeenCalledWith(state, "demo_search");
-    expect(mocks.executeSearch).toHaveBeenCalledWith(state, "demo", true, "demo", false);
+    expect(mocks.executeDescribe).toHaveBeenCalledWith(state, "demo_search", undefined);
+    expect(mocks.executeSearch).toHaveBeenCalledWith(state, "demo", true, "demo", false, undefined, undefined, undefined, undefined);
     expect(mocks.executeList).toHaveBeenCalledWith(state, "demo");
     expect(mocks.executeStatus).toHaveBeenCalledWith(state);
   });
@@ -430,7 +639,7 @@ describe("mcp runtime", () => {
     const result = await runtime.executeDirectTool(spec, "call-1", { q: "term" }, undefined, undefined, ctx);
 
     expect(result).toBe(directResult);
-    expect(mocks.createDirectToolExecutor).toHaveBeenCalledWith(expect.any(Function), expect.any(Function), spec);
+    expect(mocks.createDirectToolExecutor).toHaveBeenCalledWith(expect.any(Function), expect.any(Function), spec, false);
     expect(mocks.createDirectToolExecutor.mock.calls[0][0]()).toBe(state);
     expect(mocks.createDirectToolExecutor.mock.calls[0][1]()).toBeNull();
     expect(directExecutor).toHaveBeenCalledWith("call-1", { q: "term" }, undefined, undefined, ctx);
@@ -457,8 +666,9 @@ describe("mcp runtime", () => {
 
     await runtime.handleSessionStart({}, ctx);
     const resultPromise = runtime.executeDirectTool(spec, "call-2", { q: "term" }, signal, onUpdate, ctx);
+    await vi.waitFor(() => expect(mocks.createDirectToolExecutor).toHaveBeenCalledWith(expect.any(Function), expect.any(Function), spec, false));
 
-    expect(mocks.createDirectToolExecutor).toHaveBeenCalledWith(expect.any(Function), expect.any(Function), spec);
+    expect(mocks.createDirectToolExecutor).toHaveBeenCalledWith(expect.any(Function), expect.any(Function), spec, false);
     expect(mocks.createDirectToolExecutor.mock.calls[0][0]()).toBeNull();
     expect(mocks.createDirectToolExecutor.mock.calls[0][1]()).toBe(pendingInit.promise);
 

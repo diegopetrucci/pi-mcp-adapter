@@ -4,11 +4,11 @@ This document is the source of truth for how this fork (`diegopetrucci/pi-mcp-ad
 
 ## 1. Intake boundary: released upstream tags only
 
-A normal intake is exactly one upstream **released version tag** (for example `v2.36.0`) and the commits reachable from that tag that are part of the released history. An upstream release tag is an audit anchor, not the fork's release identity.
+A normal intake is exactly one upstream **released version tag** (for example `v5.0.0`) and the commits reachable from that tag that are part of the released history. An upstream release tag is an audit anchor, not the fork's release identity.
 
 Do not intake `upstream/main`, a moving branch, a pull request range, or a coherent feature cluster that has not been released. In particular, do not create a synthetic intake from unreleased commits merely because they look related. A later released tag can adopt those changes when the tag is reviewed as a whole. This released-tag-only boundary prevents accidental adoption of work that upstream has not shipped and keeps ledger rows reproducible.
 
-The v2.36.0 intake is therefore bounded by upstream tag `v2.36.0` at commit `c00e66b5b959f3327ebefddd93fffe8d402694a3`; commits after that tag, including `upstream/main`, are outside the intake.
+The current v5.0.0 intake is bounded by upstream tag `v5.0.0` at commit `5783e5eacfe820829b18be5d4de91e5f46e79dbb`; commits after that tag, including `upstream/main`, are outside the intake. The v2.36.0 boundary remains historical evidence and is documented in `docs/tlh-patch-inventory.md`.
 
 ## 2. Integration mechanism: explicit merge or squash-import PRs
 
@@ -26,6 +26,8 @@ Each intake should produce:
 - patch-inventory updates in `docs/tlh-patch-inventory.md` if a TLH delta was added, removed, or re-verified.
 
 For the v2.36.0 intake, upstream merge `f0fb751243ba9c0ce363312a51b50f7ed1dd2e63` is the upstream intake merge and fork PR #15 merge `ead59f05a7f52878ee4234d5dc9568c361c7a732` is the fork integration merge. The completed annotated tag `tlh-v2.36.0` points to the fork merge, and `@diegopetrucci/pi-mcp-adapter@2.36.0` was published to npm on 2026-09-23 through the trusted GitHub Actions OIDC/provenance workflow.
+
+For the current v5.0.0 intake, the released upstream tag commit is `5783e5eacfe820829b18be5d4de91e5f46e79dbb` and the observed fork WIP merge is `28499318590a688a6f7ec3b56d6311b3cc770817`. The ledger records `integration_pr` as `TBD` until a fork PR exists; this candidate does not assert a fork tag, publication, or PR completion. Its adopted-with-exceptions walk is recorded in `docs/tlh-patch-inventory.md`.
 
 ## 3. Exception-only ledger plus git DAG are authoritative
 
@@ -73,11 +75,11 @@ Upstream sync work must preserve the fork's release identity unless a separately
 - `package.json` `name` stays `@diegopetrucci/pi-mcp-adapter`;
 - TLH decides the fork `version`; do not blindly adopt upstream version bumps during intake work;
 - upstream `v*` tags are intake anchors, not fork release tags, and are never published as the fork's identity;
-- this scoped intake uses fork version `2.36.0` and completed fork tag `tlh-v2.36.0` at the fork PR #15 integration merge `ead59f05a7f52878ee4234d5dc9568c361c7a732`;
+- the current v5.0.0 intake uses fork version `5.0.0`; the upstream tag remains an intake anchor, and no v5.0.0 fork tag, publication, or PR completion is asserted here;
 - fork releases use `tlh-v*` tags;
 - if an upstream intake adopts a `package-lock.json`, regenerate it from the resolved, scoped fork `package.json` rather than hand-merging the upstream lockfile;
 - fork release/publish workflow remains the trusted-publishing path in `.github/workflows/release.yml`, with dependency installation and public-artifact build before `npm publish --provenance`;
-- changelog/docs should preserve both upstream-adopted context and TLH fork release notes when they coexist.
+- changelog/docs should preserve both upstream-adopted context and TLH fork release notes when they coexist; inherited upstream exclusion claims must be labeled as historical context when a later fork intake restores a surface.
 
 ## 7. Reporting helpers are non-authoritative
 

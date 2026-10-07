@@ -90,7 +90,7 @@ describe("directTools write refusal handling", () => {
       version: 1,
       servers: {
         runtime: {
-          configHash: computeServerHash(runtimeDefinition, cwd),
+          configHash: computeServerHash(runtimeDefinition),
           tools: [{ name: "search" }],
           resources: [],
           cachedAt: Date.now(),
@@ -102,7 +102,7 @@ describe("directTools write refusal handling", () => {
     expect(refresh).not.toHaveBeenCalled();
     expect(config.mcpServers.runtime).toBe(runtimeDefinition);
     expect(runtimeDefinition.directTools).toBe(false);
-    expect(resolveDirectTools(config as any, cache, "server", undefined, cwd)).toEqual([]);
+    expect(resolveDirectTools(config as any, cache, "server")).toEqual([]);
     expect(mocks.writeDirectToolsConfig).toHaveBeenCalledOnce();
   });
 
@@ -147,7 +147,7 @@ describe("directTools write refusal handling", () => {
     expect(mocks.writeDirectToolsConfig).toHaveBeenCalledOnce();
     expect(mocks.onDirectToolsConfigChanged).not.toHaveBeenCalled();
     expect(ui.notify).toHaveBeenCalledWith(
-      "Failed to update direct tools: Refusing to write read-only imported MCP config",
+      "Failed to save direct tools: Refusing to write read-only imported MCP config",
       "error",
     );
     expect(ui.notify).not.toHaveBeenCalledWith(expect.stringContaining("live refresh failed"), "error");

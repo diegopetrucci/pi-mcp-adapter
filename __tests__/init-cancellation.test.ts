@@ -25,8 +25,8 @@ vi.mock("../config.ts", () => ({
 }));
 vi.mock("../server-manager.ts", () => ({ McpServerManager: mocks.managerFactory }));
 vi.mock("../lifecycle.ts", () => ({ McpLifecycleManager: mocks.lifecycleFactory }));
-vi.mock("../ui-resource-handler.ts", () => ({ UiResourceHandler: vi.fn(() => ({})) }));
-vi.mock("../consent-manager.ts", () => ({ ConsentManager: vi.fn(() => ({})) }));
+vi.mock("../ui-resource-handler.ts", () => ({ UiResourceHandler: vi.fn(function () { return {}; }) }));
+vi.mock("../consent-manager.ts", () => ({ ConsentManager: vi.fn(function () { return {}; }) }));
 vi.mock("../metadata-cache.ts", () => ({
   computeServerHash: vi.fn(),
   getMetadataCachePath: vi.fn(() => "/tmp/mcp-cache.json"),
@@ -108,8 +108,8 @@ describe("initializeMcp cancellation", () => {
       return { status: "connected", tools: [], resources: [] };
     });
     const lifecycle = createLifecycle();
-    mocks.managerFactory.mockImplementation(() => manager);
-    mocks.lifecycleFactory.mockImplementation(() => lifecycle);
+    mocks.managerFactory.mockImplementation(function () { return manager; });
+    mocks.lifecycleFactory.mockImplementation(function () { return lifecycle; });
     mocks.loadMcpConfig.mockReturnValue({
       mcpServers: { demo: { command: "node", args: ["server.js"], lifecycle: "eager" } },
       settings: {},
@@ -136,8 +136,8 @@ describe("initializeMcp cancellation", () => {
       throw transportAbort;
     });
     const lifecycle = createLifecycle();
-    mocks.managerFactory.mockImplementation(() => manager);
-    mocks.lifecycleFactory.mockImplementation(() => lifecycle);
+    mocks.managerFactory.mockImplementation(function () { return manager; });
+    mocks.lifecycleFactory.mockImplementation(function () { return lifecycle; });
     mocks.loadMcpConfig.mockReturnValue({
       mcpServers: { demo: { command: "node", args: ["server.js"], lifecycle: "eager" } },
       settings: {},
@@ -160,8 +160,8 @@ describe("initializeMcp cancellation", () => {
       return { status: "connected", tools: [], resources: [] };
     });
     const lifecycle = createLifecycle();
-    mocks.managerFactory.mockImplementation(() => manager);
-    mocks.lifecycleFactory.mockImplementation(() => lifecycle);
+    mocks.managerFactory.mockImplementation(function () { return manager; });
+    mocks.lifecycleFactory.mockImplementation(function () { return lifecycle; });
     mocks.getMissingConfiguredDirectToolServers.mockReturnValue(["demo"]);
     mocks.loadMcpConfig.mockReturnValue({
       mcpServers: { demo: { command: "node", args: ["server.js"], lifecycle: "lazy" } },

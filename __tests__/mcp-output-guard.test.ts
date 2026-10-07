@@ -68,11 +68,9 @@ describe("guardMcpOutput", () => {
     expect(guarded.outputGuard?.outputLines).toBeGreaterThan(0);
     expect(guarded.outputGuard?.outputBytes).toBeLessThanOrEqual(1500);
     expect(guarded.outputGuard?.fullOutputPath).toBeTruthy();
-    expect(guarded.content.every((block) => block.type === "text")).toBe(true);
-    const returnedText = guarded.content
-      .filter((block) => block.type === "text")
-      .map((block) => block.text)
-      .join("\n");
+    expect(guarded.content).toHaveLength(1);
+    expect(guarded.content[0]).toMatchObject({ type: "text" });
+    const returnedText = guarded.content[0].type === "text" ? guarded.content[0].text : "";
     expect(returnedText).toContain("MCP text output truncated");
     expect(returnedText).toContain("Full text saved to:");
     expect(returnedText).not.toContain("line-19");
@@ -331,90 +329,28 @@ describe("guardMcpOutput", () => {
     expect(guarded.content).toEqual([image, { type: "text", text: "caption" }]);
   });
 
-  it("preserves image-before-text ordering when truncation starts in the first text block", async () => {
-    const image = { type: "image" as const, data: "img-0", mimeType: "image/png" };
-    const guarded = await guardMcpOutput(
-      [image, { type: "text", text: "caption\nrow-1\nrow-2\nrow-3\nrow-4\nrow-5" }],
-      { maxBytes: 10_000, maxLines: 5 },
-    );
-
-    expect(guarded.outputGuard).toMatchObject({ truncated: true, imageBlocksPassedThrough: 1 });
-    expect(guarded.content[0]).toEqual(image);
-    expect(guarded.content[1]).toEqual({ type: "text", text: "caption\nrow-1" });
-    expect(guarded.content[2]).toMatchObject({ type: "text" });
-    expect((guarded.content[2] as { text: string }).text).toContain("MCP text output truncated");
-  });
-
-  it("inserts the truncation notice before trailing images after partial retained text", async () => {
+  it("keeps image blocks when text output is truncated", async () => {
+    const text = Array.from({ length: 50 }, (_, i) => `row-${i}`).join("\n");
     const image = { type: "image" as const, data: "abc", mimeType: "image/png" };
     const guarded = await guardMcpOutput(
-      [{ type: "text", text: "row-0\nrow-1\nrow-2\nrow-3\nrow-4\nrow-5" }, image],
-      { maxBytes: 10_000, maxLines: 5 },
+      [{ type: "text", text }, image],
+      { maxBytes: 250, maxLines: 5 },
     );
 
     expect(guarded.outputGuard).toMatchObject({ truncated: true, imageBlocksPassedThrough: 1 });
-    expect(guarded.content[0]).toEqual({ type: "text", text: "row-0\nrow-1" });
-    expect(guarded.content[1]).toMatchObject({ type: "text" });
-    expect((guarded.content[1] as { text: string }).text).toContain("MCP text output truncated");
-    expect(guarded.content[2]).toEqual(image);
-  });
+    expect(guarded.content).toHaveLength(2);
+    expect(guarded.content[0].type).toBe("text");
+    expect(guarded.content[1]).toEqual(image);
 
-  it("does not let empty text before the cutoff consume the truncation notice", async () => {
-    const image = { type: "image" as const, data: "img-1", mimeType: "image/png" };
-    const guarded = await guardMcpOutput(
-      [
-        { type: "text", text: "lead" },
-        { type: "text", text: "" },
-        image,
-        { type: "text", text: "tail-0\ntail-1\ntail-2\ntail-3\ntail-4" },
-      ],
-      { maxBytes: 10_000, maxLines: 6 },
-    );
-
-    expect(guarded.outputGuard).toMatchObject({ truncated: true, imageBlocksPassedThrough: 1 });
-    expect(guarded.content[0]).toEqual({ type: "text", text: "lead" });
-    expect(guarded.content[1]).toEqual({ type: "text", text: "" });
-    expect(guarded.content[2]).toEqual(image);
-    expect(guarded.content[3]).toEqual({ type: "text", text: "tail-0" });
-    expect(guarded.content[4]).toMatchObject({ type: "text" });
-    expect((guarded.content[4] as { text: string }).text).toContain("MCP text output truncated");
-  });
-
-  it("preserves multi-image caption ordering when truncating later text", async () => {
-    const firstImage = { type: "image" as const, data: "img-1", mimeType: "image/png" };
-    const secondImage = { type: "image" as const, data: "img-2", mimeType: "image/png" };
-    const thirdImage = { type: "image" as const, data: "img-3", mimeType: "image/png" };
-    const guarded = await guardMcpOutput(
-      [
-        { type: "text", text: "caption one" },
-        firstImage,
-        { type: "text", text: "caption two" },
-        secondImage,
-        { type: "text", text: "caption three\nrow-1\nrow-2\nrow-3\nrow-4" },
-        thirdImage,
-      ],
-      { maxBytes: 10_000, maxLines: 6 },
-    );
-
-    expect(guarded.outputGuard).toMatchObject({ truncated: true, imageBlocksPassedThrough: 3 });
-    expect(guarded.content[0]).toEqual({ type: "text", text: "caption one" });
-    expect(guarded.content[1]).toEqual(firstImage);
-    expect(guarded.content[2]).toEqual({ type: "text", text: "caption two" });
-    expect(guarded.content[3]).toEqual(secondImage);
-    expect(guarded.content[4]).toEqual({ type: "text", text: "caption three" });
-    expect(guarded.content[5]).toMatchObject({ type: "text" });
-    expect((guarded.content[5] as { text: string }).text).toContain("MCP text output truncated");
-    expect(guarded.content[6]).toEqual(thirdImage);
+    const saved = await readFile(guarded.outputGuard!.fullOutputPath!, "utf8");
+    expect(saved).toBe(text);
   });
 
   it("reports the delivered preview in the line truncation notice and details", async () => {
     const text = Array.from({ length: 30 }, (_, i) => `entry-${i}`).join("\n");
     const guarded = await guardMcpOutput([{ type: "text", text }], { maxBytes: 10_000, maxLines: 10 });
 
-    const returnedText = guarded.content
-      .filter((block) => block.type === "text")
-      .map((block) => block.text)
-      .join("\n");
+    const returnedText = guarded.content[0].type === "text" ? guarded.content[0].text : "";
     const noticeStart = returnedText.indexOf("\n\n[MCP text output truncated:");
     expect(noticeStart).toBeGreaterThan(0);
     const deliveredPreview = returnedText.slice(0, noticeStart);
@@ -500,18 +436,15 @@ describe("guardMcpOutput", () => {
     expect(saved).toBe("Error: body\n\nExpected parameters:\n{}");
   });
 
-  it("preserves affixed text ordering around images when truncating", async () => {
-    const image = { type: "image" as const, data: "img", mimeType: "image/png" };
+  it("drops a footer that would not fit the limits beside the truncation notice", async () => {
     const guarded = await guardMcpOutput(
-      [{ type: "text", text: "body\nrow-1\nrow-2\nrow-3" }, image, { type: "text", text: "tail" }],
-      { prefix: "Error: ", suffix: "\n\nExpected parameters:\n{}", maxBytes: 10_000, maxLines: 5 },
+      [{ type: "text", text: "x".repeat(5000) }],
+      { maxBytes: 1024, footer: `\n\n[${"f".repeat(2000)}]` },
     );
 
-    expect(guarded.outputGuard?.fullOutputPath).toBeTruthy();
-    expect(guarded.content[0]).toEqual({ type: "text", text: "Error: body\nrow-1" });
-    expect(guarded.content[1]).toMatchObject({ type: "text" });
-    expect((guarded.content[1] as { text: string }).text).toContain("MCP text output truncated");
-    expect(guarded.content[2]).toEqual(image);
+    const text = (guarded.content[0] as { text: string }).text;
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(1024);
+    expect(text).not.toContain("ffff");
   });
 
   it("can be disabled to return raw output and raw details", async () => {

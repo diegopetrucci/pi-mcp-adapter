@@ -4,10 +4,14 @@ import { existsSync, realpathSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import stripJsonComments from "strip-json-comments";
-import type { McpConfig, ServerEntry } from "./types.ts";
+import type { McpConfig, McpToolAnnotations, ServerEntry } from "./types.ts";
+
+export function stripUtf8Bom(raw: string): string {
+  return raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+}
 
 export function parseJsonWithComments(raw: string): unknown {
-  return JSON.parse(stripJsonComments(raw, { trailingCommas: true }));
+  return JSON.parse(stripJsonComments(stripUtf8Bom(raw), { trailingCommas: true }));
 }
 
 /** Resolve a candidate only when its real path stays within the real root. */
@@ -247,10 +251,18 @@ export function resolveServerUrl(definition: Pick<ServerEntry, "url">, environme
 export function resolveConfigPath(value: string | undefined, environment: NodeJS.ProcessEnv = process.env): string | undefined {
   if (value === undefined) return undefined;
 
-  const resolved = interpolateEnvVars(value, environment);
+  return expandHomePath(interpolateEnvVars(value, environment));
+}
+
+/** Expand a leading home-directory marker without interpolating environment variables. */
+export function expandHomePath(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+
+  const resolved = value;
   if (resolved === "~") return homedir();
-  if (resolved.startsWith("~/") || resolved.startsWith("~\\")) {
-    return join(homedir(), resolved.slice(2));
+  if (resolved.startsWith("~/") || (platform() === "win32" && resolved.startsWith("~\\"))) {
+    const suffix = platform() === "win32" ? resolved.slice(2).replace(/[\\/]/g, sep) : resolved.slice(2);
+    return join(homedir(), suffix);
   }
   return resolved;
 }
@@ -332,6 +344,17 @@ export function truncateAtWord(text: string, target: number): string {
   }
 
   return truncated + "...";
+}
+
+/** Request `_meta` key that lets MCP servers correlate a call with the Pi tool call that made it. */
+export const TOOL_CALL_ID_REQUEST_META_KEY = "pi-mcp-adapter/toolCallId";
+
+export function withToolCallIdMeta(
+  meta: Record<string, unknown> | undefined,
+  toolCallId: string | undefined,
+): Record<string, unknown> | undefined {
+  if (!toolCallId) return meta;
+  return { ...meta, [TOOL_CALL_ID_REQUEST_META_KEY]: toolCallId };
 }
 
 export function normalizeDirectToolInputSchema(schema: unknown): Record<string, unknown> {
@@ -418,12 +441,27 @@ function assertJsonSerializable(value: unknown, context: string, path = ""): voi
 }
 
 export function formatAuthRequiredMessage(
-  config: Pick<McpConfig, "settings">,
+  config: Pick<McpConfig, "settings" | "mcpServers">,
   serverName: string,
   defaultMessage: string,
 ): string {
+  const auth = config.mcpServers[serverName]?.auth;
+  if (typeof auth === "object") return providerSignInMessage(serverName, auth.provider);
   const template = config.settings?.authRequiredMessage;
   return template ? template.replaceAll("${server}", serverName) : defaultMessage;
+}
+
+/** Servers with `auth.provider` sign in through Pi, never through MCP OAuth. */
+export function providerSignInMessage(serverName: string, provider: string): string {
+  return `MCP server "${serverName}" needs sign-in. Run /login ${provider}, then /mcp-adapter reconnect ${serverName}.`;
+}
+
+/** Why a server must not receive its `auth.provider` token at `url`, or undefined when it may. */
+export function providerAuthUrlError(url: string): string | undefined {
+  const parsed = URL.canParse(url) ? new URL(url) : undefined;
+  if (parsed?.protocol === "https:") return undefined;
+  if (parsed?.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname)) return undefined;
+  return "auth.provider requires an https URL, or http on localhost, 127.0.0.1, or [::1]";
 }
 
 export function formatMcpStatus(config: Pick<McpConfig, "settings">, message: string): string | undefined {
@@ -458,4 +496,19 @@ export function extractToolUiStreamMode(toolMeta: Record<string, unknown> | unde
     return streamMode;
   }
   return undefined;
+}
+
+/**
+ * Keep only the spec tool annotations with the right types. Server and cache
+ * input is untrusted, so a malformed field is dropped instead of failing the tool list.
+ */
+export function extractToolAnnotations(annotations: unknown): McpToolAnnotations | undefined {
+  if (!annotations || typeof annotations !== "object") return undefined;
+  const source = annotations as Record<string, unknown>;
+  const kept: McpToolAnnotations = {};
+  if (typeof source.title === "string") kept.title = source.title;
+  for (const key of ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"] as const) {
+    if (typeof source[key] === "boolean") kept[key] = source[key];
+  }
+  return Object.keys(kept).length > 0 ? kept : undefined;
 }
