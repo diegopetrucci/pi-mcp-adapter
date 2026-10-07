@@ -15,7 +15,8 @@ import { formatSchema, hasSchemaDescriptions } from "./tool-metadata.ts";
 import { renderTsShape } from "./ts-shape.ts";
 import { getObservedOutput, renderOutputShape } from "./output-shape.ts";
 import type { ObservedOutput } from "./output-shape.ts";
-import type { ContentBlock } from "./types.ts";
+import { isServerDisabled, type ContentBlock } from "./types.ts";
+import { isServerInActiveFailureBackoff } from "./failure-backoff.ts";
 
 export const DEFAULT_MCP_SCRIPT_TIMEOUT_MS = 30_000;
 const MCP_SCRIPT_INTERMEDIATE_MAX_BYTES = 16 * 1024 * 1024;
@@ -100,6 +101,33 @@ function textFromContent(content: ContentBlock[]): string {
 
 function resultErrorMessage(result: { content: ContentBlock[]; details: Record<string, unknown> }): string {
   return typeof result.details.message === "string" ? result.details.message : textFromContent(result.content);
+}
+
+/**
+ * Error suggestions expose displayed tool names, so resolve their sources from
+ * the metadata that produced them rather than guessing from configured prefixes.
+ * An explicit server scope stays authoritative when names collide.
+ */
+function addSuggestedSources(
+  state: McpExtensionState,
+  observedSources: Set<string>,
+  suggestions: unknown,
+  serverScope?: unknown,
+): void {
+  if (!Array.isArray(suggestions)) return;
+  const names = new Set(suggestions.filter((suggestion): suggestion is string => typeof suggestion === "string"));
+  if (names.size === 0) return;
+  const eligible = (server: string): boolean =>
+    !isServerDisabled(state.config.mcpServers[server]) && !isServerInActiveFailureBackoff(state, server);
+  if (typeof serverScope === "string" && serverScope.length > 0) {
+    if (eligible(serverScope) && (state.toolMetadata.get(serverScope) ?? []).some(tool => names.has(tool.name))) {
+      observedSources.add(serverScope);
+    }
+    return;
+  }
+  for (const [server, metadata] of state.toolMetadata) {
+    if (eligible(server) && metadata.some(tool => names.has(tool.name))) observedSources.add(server);
+  }
 }
 
 /** Script-usable guidance for scoping errors whose shared text points at mcp(), which scripts cannot call. */
@@ -216,6 +244,7 @@ export async function runMcpScript(
       const suggestions = Array.isArray(details.suggestions)
         ? details.suggestions.filter((suggestion): suggestion is string => typeof suggestion === "string")
         : [];
+      addSuggestedSources(state, observedSources, suggestions, server || details.server);
       const message = errorCode === "tool_not_found"
         ? `Tool "${path}" not found. Use await tools.search({ query: "..." }) inside mcpScript.${suggestions.length > 0 ? ` Did you mean: ${suggestions.join(", ")}` : ""}`
         : scriptScopeMessage(errorCode, path, details.server, "tools.call(path, args, { server })") ?? resultErrorMessage(result);
@@ -343,15 +372,17 @@ export async function runMcpScript(
       const limit = typeof input?.limit === "number" ? input.limit : 12;
       const offset = typeof input?.offset === "number" ? input.offset : 0;
       const page = paginate(outcome.matches, offset, limit);
+      const items = page.items.map(({ server: matchServer, tool, score }) => ({
+        path: tool.name,
+        name: tool.originalName,
+        server: matchServer,
+        ...(tool.description ? { description: tool.description } : {}),
+        score,
+      }));
+      for (const item of items) observedSources.add(item.server);
       return {
         ...page,
-        items: page.items.map(({ server: matchServer, tool, score }) => ({
-          path: tool.name,
-          name: tool.originalName,
-          server: matchServer,
-          ...(tool.description ? { description: tool.description } : {}),
-          score,
-        })),
+        items,
         ...(outcome.backend ? { backend: outcome.backend } : {}),
       };
     } catch (caught) {
@@ -374,6 +405,8 @@ export async function runMcpScript(
         const details = target.error.details;
         const code = String(details.error);
         error = code;
+        const suggestions = Array.isArray(details.suggestions) ? details.suggestions : [];
+        addSuggestedSources(state, observedSources, suggestions, input?.server || details.server);
         return {
           path,
           error: {
@@ -381,7 +414,7 @@ export async function runMcpScript(
             message: code === "tool_not_found"
               ? `Tool not found: ${path}`
               : scriptScopeMessage(code, path, details.server, "tools.describe({ path, server })") ?? resultErrorMessage(target.error),
-            suggestions: Array.isArray(details.suggestions) ? details.suggestions : [],
+            suggestions,
           },
         };
       }
@@ -389,7 +422,7 @@ export async function runMcpScript(
       const inputShape = tool.inputSchema ? renderTsShape(tool.inputSchema) : null;
       const inputTypeScript = inputShape ?? (tool.inputSchema ? formatSchema(tool.inputSchema) : null);
       const observed = tool.resourceUri ? undefined : getObservedOutput(state, server, tool);
-      return {
+      const descriptor = {
         path: tool.name,
         name: tool.originalName,
         server,
@@ -409,6 +442,8 @@ export async function runMcpScript(
           },
         } : {}),
       };
+      observedSources.add(server);
+      return descriptor;
     } catch (caught) {
       error = caught;
       throw caught;
