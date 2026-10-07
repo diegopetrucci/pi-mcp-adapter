@@ -27,7 +27,7 @@ Each intake should produce:
 
 For the v2.36.0 intake, upstream merge `f0fb751243ba9c0ce363312a51b50f7ed1dd2e63` is the upstream intake merge and fork PR #15 merge `ead59f05a7f52878ee4234d5dc9568c361c7a732` is the fork integration merge. The completed annotated tag `tlh-v2.36.0` points to the fork merge, and `@diegopetrucci/pi-mcp-adapter@2.36.0` was published to npm on 2026-09-23 through the trusted GitHub Actions OIDC/provenance workflow.
 
-For the current v5.0.0 intake, the released upstream tag commit is `5783e5eacfe820829b18be5d4de91e5f46e79dbb` and the observed fork WIP merge is `28499318590a688a6f7ec3b56d6311b3cc770817`. The ledger records `integration_pr` as `TBD` until a fork PR exists; this candidate does not assert a fork tag, publication, or PR completion. Its adopted-with-exceptions walk is recorded in `docs/tlh-patch-inventory.md`.
+For the finalized v5.0.0 intake, the released upstream tag commit is `5783e5eacfe820829b18be5d4de91e5f46e79dbb`; the observed fork WIP merge `28499318590a688a6f7ec3b56d6311b3cc770817` remains provenance evidence, not a newly created commit. Fork PR #17 integrates the intake at merge `a305e43e0abac015e6aeb988b15f1bba23f62e46`. Annotated tag `tlh-v5.0.0` object `1c3071dec6655f78d9f51110102a452047b3bf3f` targets that merge. `@diegopetrucci/pi-mcp-adapter@5.0.0` was published through trusted OIDC workflow run `37613129066`, and the [GitHub release record](https://github.com/diegopetrucci/pi-mcp-adapter/releases/tag/tlh-v5.0.0) was the latest release observed in the 2026-10-07 verification. Registry package identity/version, 226 package files, 117 `dist/` files, tarball integrity, and the registry-provided provenance payload binding the tarball to the exact tag, merge, and workflow were verified; independent cryptographic signature verification, live-provider E2E, and fresh audits are not claimed. The release explicitly selected `refs/tags/tlh-v5.0.0`; the workflow default remains `tlh-v2.36.0` and was not changed. Its adopted-with-exceptions walk is recorded in `docs/tlh-patch-inventory.md`.
 
 ## 3. Exception-only ledger plus git DAG are authoritative
 
@@ -75,7 +75,7 @@ Upstream sync work must preserve the fork's release identity unless a separately
 - `package.json` `name` stays `@diegopetrucci/pi-mcp-adapter`;
 - TLH decides the fork `version`; do not blindly adopt upstream version bumps during intake work;
 - upstream `v*` tags are intake anchors, not fork release tags, and are never published as the fork's identity;
-- the current v5.0.0 intake uses fork version `5.0.0`; the upstream tag remains an intake anchor, and no v5.0.0 fork tag, publication, or PR completion is asserted here;
+- the finalized v5.0.0 intake uses fork version `5.0.0`; the upstream tag remains an intake anchor, while the fork release uses annotated tag `tlh-v5.0.0`, PR #17 merge `a305e43e0abac015e6aeb988b15f1bba23f62e46`, and the published scoped package;
 - fork releases use `tlh-v*` tags;
 - if an upstream intake adopts a `package-lock.json`, regenerate it from the resolved, scoped fork `package.json` rather than hand-merging the upstream lockfile;
 - fork release/publish workflow remains the trusted-publishing path in `.github/workflows/release.yml`, with dependency installation and public-artifact build before `npm publish --provenance`;
