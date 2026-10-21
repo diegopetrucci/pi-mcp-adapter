@@ -1,3 +1,4 @@
+import { assertSupportedNodeRuntime } from "./node-runtime.ts";
 import { TypeSafeClient } from "@typesafe-ai/sdk";
 import type { McpExtensionState } from "./state.ts";
 import { isServerDisabled } from "./types.ts";
@@ -191,6 +192,7 @@ function validateResponse(value: unknown, input: JevEvaluateInput): JevEvaluatio
  */
 function createPinnedEndpointFetch(endpoint: ResolvedJevEndpoint): (input: string, init?: RequestInit) => Promise<Response> {
   return (input, init) => {
+    assertSupportedNodeRuntime();
     // A replacer function keeps `$&`, `$$`, and friends in the configured path literal.
     const target = input.replace(JEV_SDK_PATH, () => endpoint.path);
     const url = new URL(target);

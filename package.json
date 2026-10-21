@@ -39,7 +39,7 @@
   "license": "MIT",
   "author": "Nico Bailon",
   "engines": {
-    "node": ">=20"
+    "node": "^22.23.4 || ^24.22.1 || ^26.12.1"
   },
   "bin": {
     "pi-mcp-adapter": "cli.js"
@@ -125,6 +125,7 @@
     "package-mcp-loader.ts",
     "server-manager.ts",
     "bearer-command-resolver.ts",
+    "node-runtime.ts",
     "http-ca.ts",
     "request-headers-command.ts",
     "unix-socket-transport.ts",

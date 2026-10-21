@@ -124,3 +124,11 @@ To share one stdio MCP server across Pi sessions, run it under [`rmcp-mux`](http
 ```
 
 The adapter owns only its client socket and closes that connection when the Pi runtime stops. `rmcp-mux` owns the upstream process, request routing, initialization cache, restart policy, client limits, and socket permissions. Start and configure the mux separately; the adapter never discovers, starts, adopts, or stops its daemon. A socket is an explicit trusted local endpoint, so do not point unrelated projects or users at a mux service unless its tools, state, credentials, and filesystem access are intended to be shared.
+
+## Runtime security and custom trust
+
+Use Node.js 22.23.4 or later on 22.x, 24.22.1 or later on 24.x, or 26.12.1 or later on 26.x. These are the supported minimums for the [October 2026 Node security release](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases), including CVE-2026-111497 in native Brotli decoding and the [eMudhra CA compromise](https://emudhra.we-have-a-problem.com/). Updating Undici or another npm dependency cannot patch Node's native decoder. Endpoint probing reads HTTP response bodies; HTTP/SSE transport and OAuth/Jev requests also use Node networking. Runtime checks run before these network operations. Local configuration inspection and stdio/socket transport are not given the same demonstrated HTTP decoding path; child MCP server runtimes must be maintained independently.
+
+After updating Node, restart the Pi/TLH process that hosts this adapter and verify its actual `process.version` / `process.execPath`; changing a shell's `node` does not update a running host. This repository patch does not upgrade or restart deployed hosts.
+
+The fixed Node releases update their bundled trust. A configured `caFile` replaces that trust for its origin and still verifies hostnames and expiry. Review and update those PEM bundles separately, along with `NODE_EXTRA_CA_CERTS`, system/OpenSSL CA stores, or other trust overrides used by the host. A Node version check cannot prove that an operator-supplied trust store rejects compromised chains. Browser revocation protections do not establish that Node or a custom bundle is safe. Do not disable TLS verification to restore connectivity.

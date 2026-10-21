@@ -1,3 +1,4 @@
+import { assertSupportedNodeRuntime } from "./node-runtime.js";
 import { readFileSync } from "node:fs";
 import { X509Certificate } from "node:crypto";
 import { Agent, Request as UndiciRequest, fetch as undiciFetch } from "undici";
@@ -19,6 +20,7 @@ export function createCaFetch(definition) {
     validateCaFile(definition);
     if (definition.caFile === undefined)
         return undefined;
+    assertSupportedNodeRuntime();
     const origin = new URL(resolveServerUrl(definition)).origin;
     if (getMissingEnvVars(definition.caFile).length)
         throw new Error("Missing environment variable in MCP caFile");
