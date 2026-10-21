@@ -1,5 +1,8 @@
 node_modules/
-dist/
+dist/*
+!dist/node-runtime.js
+!dist/node-runtime.js.map
+!dist/node-runtime.d.ts
 .pi/*
 !.pi/skills/
 .pi/skills/*

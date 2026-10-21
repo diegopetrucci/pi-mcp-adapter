@@ -6,6 +6,8 @@
 
 > TLH fork note: this fork is maintained for **The Last Harness (tlh)**, where tlh automation bundles and pins it for compatibility. It is not intended as a general standalone distribution target outside that TLH use.
 
+Requires Node.js **22.23.4+ (22.x), 24.22.1+ (24.x), or 26.12.1+ (26.x)**. Other release lines and prereleases are unsupported. HTTP transports, endpoint probes, OAuth, and provider requests fail closed on older runtimes, even if npm ignores `engines`. See [runtime security and custom trust](docs/servers.md#runtime-security-and-custom-trust).
+
 Use MCP servers with [Pi](https://github.com/badlogic/pi-mono/) without burning your context window.
 
 https://github.com/user-attachments/assets/4b7c66ff-e27e-4639-b195-22c3db406a5a

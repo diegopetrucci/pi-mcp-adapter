@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: "22.23.4"
           cache: npm
 
       - run: npm ci
@@ -55,6 +55,18 @@ jobs:
       - run: npm run test:conformance
       - run: npm pack --dry-run
 
+  node26-http-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "26.12.1"
+          cache: npm
+      - run: npm ci
+      - run: npm test -- __tests__/node-runtime.test.ts __tests__/mcp-probe.test.ts __tests__/http-ca.test.ts
+
   node24-worker-fds:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -63,7 +75,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: "24.22.1"
           cache: npm
 
       - run: npm ci
@@ -77,7 +89,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: "22.23.4"
           cache: npm
 
       - run: npm ci

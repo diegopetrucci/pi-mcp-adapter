@@ -15,6 +15,10 @@ This table records the deliberate fork-only deltas and safeguards that must surv
 | Built-in MCP settings-write exclusion | Pi's native MCP settings and config ownership stay user-controlled: the adapter may read supported native MCP inputs but never writes Pi's user or project settings. | `index.ts`, `config.ts`, `docs/configuration.md` | `__tests__/auth-startup.test.ts`, `__tests__/index-lifecycle.test.ts`, `__tests__/pi-mcp-config.test.ts` | yes |
 | `.agents` compatibility detection-only boundary | `.agents` compatibility files are surfaced for inspection or explicit adoption, not auto-loaded or rewritten; adapter-owned writes stay in adapter-owned layers. | `config.ts`, `mcp-setup-panel.ts`, `onboarding-state.ts` | `__tests__/config.test.ts`, `__tests__/mcp-setup-preview-refusal.test.ts`, `__tests__/commands-onboarding.test.ts` | yes |
 
+## October 2026 runtime security requirement
+
+This fork requires Node `^22.23.4 || ^24.22.1 || ^26.12.1`. `node-runtime.ts` enforces the same supported release lines before HTTP connection, probing, custom-CA setup, OAuth fetch creation, and Jev requests, with regressions in `__tests__/node-runtime.test.ts`. Preserve these guards and metadata/CI alignment during upstream intake; an npm-only update cannot remediate the native Brotli decoder. Custom trust bundles remain operator-owned (see `docs/servers.md`).
+
 ## Historical v2.11 intake walk
 
 - Dim connected-server footer: re-walked via `npx vitest run __tests__/init-status-bar.test.ts`; footer dimming, connected-name filtering, and empty-state clearing passed on the v2.11 merged tree.

@@ -1,3 +1,4 @@
+import { assertSupportedNodeRuntime } from "./node-runtime.js";
 import { mkdirSync, statSync } from "node:fs";
 import { BlockList, isIP } from "node:net";
 import { isDeepStrictEqual } from "node:util";
@@ -1265,6 +1266,7 @@ export class McpServerManager {
         accepted.add(elicitationId);
     }
     async connectHttpClient(definition, serverName, requestOptions, signal, traceObserver, credentialsInvalidated = false, oauthAuthority, attemptOwner) {
+        assertSupportedNodeRuntime();
         throwIfAborted(signal);
         const serverUrl = resolveServerUrl(definition);
         const url = new URL(serverUrl);
