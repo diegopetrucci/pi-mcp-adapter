@@ -1,3 +1,4 @@
+import { assertSupportedNodeRuntime } from "./node-runtime.ts";
 import type { FetchLike } from "@modelcontextprotocol/client"
 import { combineAbortSignals } from "./runtime-owner.ts"
 import { interpolateEnvRecord, resolveCommandSecretsRecord } from "./utils.ts"
@@ -55,6 +56,7 @@ export function createOAuthFetch(
   signal?: AbortSignal,
   options: { timeout?: boolean; delegate?: FetchLike } = {},
 ): OAuthFetch {
+  assertSupportedNodeRuntime()
   const origin = new URL(serverUrl).origin
   let headerResolutionError: TypeError | undefined
   const throwIfHeaderResolutionFailed = () => {

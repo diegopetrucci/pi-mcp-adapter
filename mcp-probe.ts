@@ -1,3 +1,4 @@
+import { assertSupportedNodeRuntime } from "./node-runtime.ts";
 const PROBE_TIMEOUT_MS = 5_000;
 const MODERN_PROTOCOL_VERSION = "2026-07-28";
 const LEGACY_PROTOCOL_VERSION = "2025-06-18";
@@ -183,6 +184,7 @@ function ambiguousNotMcp(response: Response): McpProbeResult | undefined {
 
 /** Makes one unauthenticated metadata-only request to identify an HTTP endpoint's protocol shape. */
 export async function probeMcpEndpoint(url: string | URL): Promise<McpProbeResult> {
+  assertSupportedNodeRuntime();
   const { response: modernResponse, outcome: modernOutcome } = await probe(url, MODERN_STRATEGY);
   if (modernOutcome.kind === "mcp") return modernOutcome.result;
   let ambiguousResult = ambiguousNotMcp(modernResponse);

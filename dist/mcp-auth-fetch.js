@@ -1,3 +1,4 @@
+import { assertSupportedNodeRuntime } from "./node-runtime.js";
 import { combineAbortSignals } from "./runtime-owner.js";
 import { interpolateEnvRecord, resolveCommandSecretsRecord } from "./utils.js";
 export function resolveOAuthHeaders(values, options = {}) {
@@ -40,6 +41,7 @@ function resolveOAuthRequestTimeoutMs() {
  * types). Credential-bearing redirects fail closed, including same-origin ones.
  */
 export function createOAuthFetch(serverUrl, getHeaders = () => new Headers(), signal, options = {}) {
+    assertSupportedNodeRuntime();
     const origin = new URL(serverUrl).origin;
     let headerResolutionError;
     const throwIfHeaderResolutionFailed = () => {

@@ -6,6 +6,8 @@
 
 > TLH fork note: this fork is maintained for **The Last Harness (tlh)**, where tlh automation bundles and pins it for compatibility. It is not intended as a general standalone distribution target outside that TLH use.
 
+Requires Node.js **22.23.4+ (22.x), 24.22.1+ (24.x), or 26.12.1+ (26.x)**. Other release lines and prereleases are unsupported. HTTP transports, endpoint probes, OAuth, and provider requests fail closed on older runtimes, even if npm ignores `engines`. See [runtime security and custom trust](docs/servers.md#runtime-security-and-custom-trust).
+
 Use MCP servers with [Pi](https://github.com/badlogic/pi-mono/) without burning your context window.
 
 https://github.com/user-attachments/assets/4b7c66ff-e27e-4639-b195-22c3db406a5a
@@ -66,10 +68,10 @@ While the built-in is turned on, Pi may warn at startup and `/reload` that it wa
 ## Install
 
 ```bash
-pi install npm:@diegopetrucci/pi-mcp-adapter@5.0.0
+pi install npm:@diegopetrucci/pi-mcp-adapter@5.0.1
 ```
 
-TLH automation should use this exact pinned install target. The upstream `v5.0.0` tag is only the intake anchor; the fork-owned package identity and version are `@diegopetrucci/pi-mcp-adapter@5.0.0` for bundled tlh integration. The fork release was integrated through [PR #17](https://github.com/diegopetrucci/pi-mcp-adapter/pull/17) at merge [`a305e43e0abac015e6aeb988b15f1bba23f62e46`](https://github.com/diegopetrucci/pi-mcp-adapter/commit/a305e43e0abac015e6aeb988b15f1bba23f62e46), published through [OIDC workflow run 37613129066](https://github.com/diegopetrucci/pi-mcp-adapter/actions/runs/37613129066), and released as [`tlh-v5.0.0`](https://github.com/diegopetrucci/pi-mcp-adapter/releases/tag/tlh-v5.0.0).
+TLH automation should use this exact pinned install target. The upstream `v5.0.0` tag is only the intake anchor; the fork-owned package identity and version are `@diegopetrucci/pi-mcp-adapter@5.0.1` for bundled tlh integration. Version 5.0.1 is a fork-only patch on top of the upstream v5.0.0 intake; Release-prep [PR #20](https://github.com/diegopetrucci/pi-mcp-adapter/pull/20) was squash-merged as [`f0d5d4efa884d1c6c84b301f8925beee94a54330`](https://github.com/diegopetrucci/pi-mcp-adapter/commit/f0d5d4efa884d1c6c84b301f8925beee94a54330) and ships #19. Annotated tag `tlh-v5.0.1` object `9ec4f3c928fc7b898de762e4b0942a997b90b5d7` targets that commit, and the [GitHub release](https://github.com/diegopetrucci/pi-mcp-adapter/releases/tag/tlh-v5.0.1) is latest. `@diegopetrucci/pi-mcp-adapter@5.0.1` was published through trusted OIDC [workflow run 39778515390](https://github.com/diegopetrucci/pi-mcp-adapter/actions/runs/39778515390) dispatched from `main` with input `ref=tlh-v5.0.1`, so registry provenance records workflow ref `refs/heads/main` and commit `f0d5d4e` (the tag target) rather than the tag ref. npm dist-tag `latest` is `5.0.1`; the package has 230 files, integrity `sha512-yN1cFPst5nbgm88WxZ+s8AlKcEwJvoC9RshK/6tgQxBjdckTSglS/DASa3k3xLMyB/W8qUG1Fkz0LNGFnC2rbw==`, and engines `^22.23.4 || ^24.22.1 || ^26.12.1`; the registry provenance payload subject digest matches the integrity. Independent cryptographic signature verification, live-provider E2E, and fresh audits are not claimed. The v5.0.0 intake release was integrated through [PR #17](https://github.com/diegopetrucci/pi-mcp-adapter/pull/17) at merge [`a305e43e0abac015e6aeb988b15f1bba23f62e46`](https://github.com/diegopetrucci/pi-mcp-adapter/commit/a305e43e0abac015e6aeb988b15f1bba23f62e46), published through [OIDC workflow run 37613129066](https://github.com/diegopetrucci/pi-mcp-adapter/actions/runs/37613129066), and released as [`tlh-v5.0.0`](https://github.com/diegopetrucci/pi-mcp-adapter/releases/tag/tlh-v5.0.0).
 
 Maintainer note: upstream intake policy for this fork lives in `docs/UPSTREAM-SYNC.md`, with fork-only delta tracking in `docs/tlh-patch-inventory.md`.
 

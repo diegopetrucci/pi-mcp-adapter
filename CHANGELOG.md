@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - TLH fork: servers that launch Xcode's MCP bridge (`xcrun mcpbridge` or a command named `mcpbridge`) now default to no idle timeout, so Xcode's per-connection "Allow agent to access Xcode?" prompt is not repeated after idle shutdown. An explicit per-server `idleTimeout` still wins; lifecycle modes and server definitions are unchanged.
 
+## [5.0.1] - 2026-10-22
+
+### TLH fork notes - v5.0.1
+
+- Fork-only security patch shipping commit `fcf03db` ([#19](https://github.com/diegopetrucci/pi-mcp-adapter/pull/19)); no upstream changes are adopted and the upstream intake history is unchanged.
+- New Node engine requirement: `^22.23.4 || ^24.22.1 || ^26.12.1` (narrowed from `>=20`). Older runtimes and prereleases are unsupported; HTTP transports, probes, OAuth, custom-CA setup, and provider/Jev requests fail closed even if npm ignores `engines`. An npm-only update cannot remediate the native Brotli decoder.
+- Install pin for TLH automation: `pi install npm:@diegopetrucci/pi-mcp-adapter@5.0.1`.
+- Tag and publish evidence: Release-prep [PR #20](https://github.com/diegopetrucci/pi-mcp-adapter/pull/20) was squash-merged as [`f0d5d4efa884d1c6c84b301f8925beee94a54330`](https://github.com/diegopetrucci/pi-mcp-adapter/commit/f0d5d4efa884d1c6c84b301f8925beee94a54330) and ships #19. Annotated tag `tlh-v5.0.1` object `9ec4f3c928fc7b898de762e4b0942a997b90b5d7` targets that commit, and the [GitHub release](https://github.com/diegopetrucci/pi-mcp-adapter/releases/tag/tlh-v5.0.1) is latest. `@diegopetrucci/pi-mcp-adapter@5.0.1` was published through trusted OIDC [workflow run 39778515390](https://github.com/diegopetrucci/pi-mcp-adapter/actions/runs/39778515390) dispatched from `main` with input `ref=tlh-v5.0.1`, so registry provenance records workflow ref `refs/heads/main` and commit `f0d5d4e` (the tag target) rather than the tag ref. npm dist-tag `latest` is `5.0.1`; the package has 230 files, integrity `sha512-yN1cFPst5nbgm88WxZ+s8AlKcEwJvoC9RshK/6tgQxBjdckTSglS/DASa3k3xLMyB/W8qUG1Fkz0LNGFnC2rbw==`, and engines `^22.23.4 || ^24.22.1 || ^26.12.1`; the registry provenance payload subject digest matches the integrity. Independent cryptographic signature verification, live-provider E2E, and fresh audits are not claimed.
+
 ## [5.0.0] - 2026-10-07
 
 ### TLH fork notes - v5.0.0 (adopted-with-exceptions)

@@ -1,3 +1,4 @@
+import { assertSupportedNodeRuntime } from "./node-runtime.ts";
 import { mkdirSync, statSync } from "node:fs";
 import { BlockList, isIP } from "node:net";
 import { isDeepStrictEqual } from "node:util";
@@ -1571,6 +1572,7 @@ export class McpServerManager {
     oauthAuthority?: OAuthAuthority,
     attemptOwner?: AbortController,
   ): Promise<{ client: Client; transport: Transport; status: "connected" | "needs-auth"; credentialsInvalidated: boolean }> {
+    assertSupportedNodeRuntime();
     throwIfAborted(signal);
     const serverUrl = resolveServerUrl(definition)!;
     const url = new URL(serverUrl);

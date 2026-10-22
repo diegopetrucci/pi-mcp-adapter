@@ -1,3 +1,4 @@
+import { assertSupportedNodeRuntime, UnsupportedNodeRuntimeError } from "./node-runtime.ts";
 /**
  * MCP Auth Flow
  * 
@@ -463,6 +464,7 @@ export async function startAuth(
   operationAuthority?: OAuthAuthority,
 ): Promise<{ authorizationUrl: string }> {
   if (isServerDisabled(definition)) throw new Error(`MCP server "${serverName}" is disabled`)
+  assertSupportedNodeRuntime()
   const authority = operationAuthority ?? captureOAuthAuthority(serverName)
   authority()
   const runtime = getRuntime(options)
@@ -1196,7 +1198,7 @@ export async function getValidToken(
         authProvider.deactivate()
       }
     } catch (error) {
-      if (isAbortError(error, signal) || error instanceof OAuthCredentialStoreError) throw error
+      if (isAbortError(error, signal) || error instanceof OAuthCredentialStoreError || error instanceof UnsupportedNodeRuntimeError) throw error
       console.error(`MCP Auth: Token refresh failed for ${serverName}`)
       return null
     }
