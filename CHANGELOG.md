@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.0.1] - 2026-10-22
+
+### TLH fork notes - v5.0.1
+
+- Fork-only security patch shipping commit `fcf03db` ([#19](https://github.com/diegopetrucci/pi-mcp-adapter/pull/19)); no upstream changes are adopted and the upstream intake history is unchanged.
+- New Node engine requirement: `^22.23.4 || ^24.22.1 || ^26.12.1` (narrowed from `>=20`). Older runtimes and prereleases are unsupported; HTTP transports, probes, OAuth, custom-CA setup, and provider/Jev requests fail closed even if npm ignores `engines`. An npm-only update cannot remediate the native Brotli decoder.
+- Install pin for TLH automation: `pi install npm:@diegopetrucci/pi-mcp-adapter@5.0.1`.
+- Tag and publish evidence: pending (to be filled after publication).
+
 ## [5.0.0] - 2026-10-07
 
 ### TLH fork notes - v5.0.0 (adopted-with-exceptions)

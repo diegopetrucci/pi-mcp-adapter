@@ -47,10 +47,10 @@ describe("TLH package identity and release evidence", () => {
     const exactInstall = `pi install npm:${packageJson.name}@${packageJson.version}`;
 
     expect(packageJson.name).toBe("@diegopetrucci/pi-mcp-adapter");
-    expect(packageJson.version).toBe("5.0.0");
+    expect(packageJson.version).toBe("5.0.1");
     expect(packageJson.publishConfig).toMatchObject({ access: "public" });
     expect(readme).toContain(exactInstall);
-    expect(readme.match(/pi install npm:@diegopetrucci\/pi-mcp-adapter@5\.0\.0/g)).toHaveLength(1);
+    expect(readme.match(/pi install npm:@diegopetrucci\/pi-mcp-adapter@5\.0\.1/g)).toHaveLength(1);
     expect(readme).toContain("The adapter does not modify Pi's user or project settings");
     expect(readme).not.toContain("turns Pi's built-in MCP off in Pi's settings");
   });
@@ -64,6 +64,8 @@ describe("TLH package identity and release evidence", () => {
     expect(changelog).toContain("### TLH fork notes - v5.0.0 (adopted-with-exceptions)");
     expect(changelog).toContain("> **Inherited upstream history (2.12–2.35):** retained for context only. At the v2.36.0 intake boundary the URL installer and Jev/TypeSafe integrations were excluded; the Jev/TypeSafe exclusion is superseded by the v5.0.0 intake.");
     expect(changelog).toContain("pi install npm:@diegopetrucci/pi-mcp-adapter@5.0.0");
+    expect(changelog).toContain("## [5.0.1] - 2026-10-22");
+    expect(changelog).toContain("pi install npm:@diegopetrucci/pi-mcp-adapter@5.0.1");
     expect(changelog).toContain("The adapter does not modify Pi's user or project settings");
     expect(changelog).toContain("docs/UPSTREAM-SYNC.md");
   });
