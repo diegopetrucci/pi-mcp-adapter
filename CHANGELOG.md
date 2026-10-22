@@ -7,9 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.0.2] - 2026-10-22
+
 ### Changed
 
 - TLH fork: servers that launch Xcode's MCP bridge (`xcrun mcpbridge` or a command named `mcpbridge`) now default to no idle timeout, so Xcode's per-connection "Allow agent to access Xcode?" prompt is not repeated after idle shutdown. An explicit per-server `idleTimeout` still wins; lifecycle modes and server definitions are unchanged.
+
+### TLH fork notes - v5.0.2
+
+- Fork-only patch shipping [#22](https://github.com/diegopetrucci/pi-mcp-adapter/pull/22) (Xcode `mcpbridge` servers default to no idle timeout); no upstream changes are adopted and the upstream intake history is unchanged.
+- Node engine requirement is unchanged from 5.0.1: `^22.23.4 || ^24.22.1 || ^26.12.1`. The patched-Node runtime guard from #19 is retained.
+- Install pin for TLH automation: `pi install npm:@diegopetrucci/pi-mcp-adapter@5.0.2`.
+- Tag and publish evidence: pending (to be filled after publication).
 
 ## [5.0.1] - 2026-10-22
 
