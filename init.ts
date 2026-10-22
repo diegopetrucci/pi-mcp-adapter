@@ -27,6 +27,7 @@ import { resourceNameToToolName } from "./resource-tools.ts";
 import { UiResourceHandler } from "./ui-resource-handler.ts";
 import { formatMcpFooterStatus, formatMcpStatus, openUrl, parallelLimit, providerSignInMessage, sanitizeTerminalText } from "./utils.ts";
 import { logger } from "./logger.ts";
+import { defaultIdleTimeoutFor } from "./idle-defaults.ts";
 import { throwIfAborted } from "./abort.ts";
 import { getAuthStorageOptions } from "./mcp-auth.ts";
 import { createOAuthRuntime, hasPendingAuth, shutdownOAuth, type McpOAuthRuntime } from "./mcp-auth-flow.ts";
@@ -313,7 +314,7 @@ export async function initializeMcp(
   for (const [name, definition] of serverEntries) {
     const lifecycleMode = definition.lifecycle ?? "lazy";
     const persistsAfterFirstSpawn = lifecycleMode === "eager" || lifecycleMode === "lazy-keep-alive";
-    const idleOverride = definition.idleTimeout ?? (persistsAfterFirstSpawn ? 0 : undefined);
+    const idleOverride = definition.idleTimeout ?? (persistsAfterFirstSpawn ? 0 : defaultIdleTimeoutFor(definition));
     lifecycle.registerServer(
       name,
       definition,
@@ -799,6 +800,8 @@ function getEffectiveIdleTimeoutMinutes(state: McpExtensionState, serverName: st
   if (typeof definition.idleTimeout === "number") return definition.idleTimeout;
   const mode = definition.lifecycle ?? "lazy";
   if (mode === "eager" || mode === "lazy-keep-alive") return 0;
+  const defaultIdle = defaultIdleTimeoutFor(definition);
+  if (defaultIdle !== undefined) return defaultIdle;
   return typeof state.config.settings?.idleTimeout === "number" ? state.config.settings.idleTimeout : 10;
 }
 
