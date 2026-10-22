@@ -17,7 +17,7 @@ This table records the deliberate fork-only deltas and safeguards that must surv
 
 ## October 2026 runtime security requirement
 
-This fork requires Node `^22.23.4 || ^24.22.1 || ^26.12.1`. `node-runtime.ts` enforces the same supported release lines before HTTP connection, probing, custom-CA setup, OAuth fetch creation, and Jev requests, with regressions in `__tests__/node-runtime.test.ts`. Preserve these guards and metadata/CI alignment during upstream intake; an npm-only update cannot remediate the native Brotli decoder. Custom trust bundles remain operator-owned (see `docs/servers.md`).
+This fork requires Node `^22.23.4 || ^24.22.1 || ^26.12.1`. `node-runtime.ts` enforces the same supported release lines before HTTP connection, probing, custom-CA setup, OAuth fetch creation, and Jev requests, with regressions in `__tests__/node-runtime.test.ts`. Preserve these guards and metadata/CI alignment during upstream intake; an npm-only update cannot remediate the native Brotli decoder. Custom trust bundles remain operator-owned (see `docs/servers.md`). This requirement ships in fork release 5.0.1.
 
 ## Historical v2.11 intake walk
 
