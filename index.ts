@@ -48,6 +48,7 @@ import {
   createMcpScriptToolCallRenderer,
   resolveMcpToolRenderOptions,
 } from "./tool-result-renderer.ts";
+import { defaultIdleTimeoutFor } from "./idle-defaults.ts";
 import { getConfigPathFromArgv, truncateAtWord } from "./utils.ts";
 
 export interface McpServerRegistration {
@@ -942,7 +943,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions = {}) {
   function attachRuntimeServerLifecycle(state: McpExtensionState, name: string, definition: ServerEntry): void {
     const lifecycleMode = definition.lifecycle ?? "lazy";
     const persistsAfterFirstSpawn = lifecycleMode === "eager" || lifecycleMode === "lazy-keep-alive";
-    const idleOverride = definition.idleTimeout ?? (persistsAfterFirstSpawn ? 0 : undefined);
+    const idleOverride = definition.idleTimeout ?? (persistsAfterFirstSpawn ? 0 : defaultIdleTimeoutFor(definition));
     state.lifecycle.registerServer(
       name,
       definition,

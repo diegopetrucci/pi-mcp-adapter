@@ -394,6 +394,24 @@ describe("runtime MCP server registration", () => {
     expect(state.manager.close).toHaveBeenCalledTimes(1);
   });
 
+  it("registers runtime Xcode mcpbridge servers with no idle timeout", async () => {
+    const state = createState();
+    mocks.initializeMcp.mockResolvedValue(state);
+    const { default: mcpAdapter, registerMcpServer } = await import("../index.ts");
+    const { api, handlers } = createPi();
+    mcpAdapter(api);
+    await handlers.get("session_start")?.({}, {});
+    await settle();
+
+    await registerMcpServer({ pi: api, name: "xcode", definition: { command: "xcrun", args: ["mcpbridge"] } }).dispose();
+
+    expect(state.lifecycle.registerServer).toHaveBeenCalledWith(
+      "xcode",
+      expect.objectContaining({ command: "xcrun", args: ["mcpbridge"] }),
+      { idleTimeout: 0 },
+    );
+  });
+
   it("fails closed on duplicate names against config and other registrations", async () => {
     mocks.loadMcpConfig.mockReturnValue({
       mcpServers: { configured: { url: "https://configured.test/mcp" } },

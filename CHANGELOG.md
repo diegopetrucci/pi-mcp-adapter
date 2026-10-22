@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- TLH fork: servers that launch Xcode's MCP bridge (`xcrun mcpbridge` or a command named `mcpbridge`) now default to no idle timeout, so Xcode's per-connection "Allow agent to access Xcode?" prompt is not repeated after idle shutdown. An explicit per-server `idleTimeout` still wins; lifecycle modes and server definitions are unchanged.
+
 ## [5.0.1] - 2026-10-22
 
 ### TLH fork notes - v5.0.1

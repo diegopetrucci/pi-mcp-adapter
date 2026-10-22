@@ -143,6 +143,7 @@
     "agent-plugin-provenance.ts",
     "resource-tools.ts",
     "lifecycle.ts",
+    "idle-defaults.ts",
     "mcp-status.ts",
     "metadata-cache.ts",
     "mcp-probe.ts",
