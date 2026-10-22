@@ -15,6 +15,8 @@ describe("defaultIdleTimeoutFor", () => {
     [{ command: "/usr/bin/xcrun", args: ["mcpbridge"] }, 0],
     [{ command: "mcpbridge" }, 0],
     [{ command: "/Applications/Xcode.app/Contents/Developer/usr/bin/mcpbridge", args: ["--x"] }, 0],
+    [{ command: "xcrun", args: ["--sdk", "macosx", "mcpbridge"] }, 0],
+    [{ command: "xcrun", args: ["--toolchain", "X", "mcpbridge"] }, 0],
     [{ command: "xcrun", args: ["simctl"] }, undefined],
     [{ command: "xcrun" }, undefined],
     [{ command: "node", args: ["mcpbridge"] }, undefined],
