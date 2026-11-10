@@ -293,7 +293,8 @@ describe("production direct-tool refresh execution", () => {
   beforeEach(() => {
     vi.resetModules();
     delete process.env.MCP_DIRECT_TOOLS;
-    process.env.MCP_UI_VIEWER = "none";
+    // MCP Apps UI is opt-in; this proof opts in so the ui:// refresh path runs.
+    process.env.MCP_UI_VIEWER = "browser";
     fixture = undefined;
     for (const value of Object.values(mocks)) {
       if (typeof value === "function" && "mockReset" in value) value.mockReset();

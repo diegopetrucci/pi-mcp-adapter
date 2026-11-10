@@ -163,7 +163,7 @@ describe("MCP_UI_VIEWER=orca", () => {
     state.uiServer?.close("test-cleanup");
   });
 
-  it("ignores the Orca viewer preference when suppressed", async () => {
+  it("does not start a UI session when MCP_UI_VIEWER is none", async () => {
     process.env.MCP_UI_VIEWER = "none";
     const { state } = makeState();
 
@@ -174,10 +174,10 @@ describe("MCP_UI_VIEWER=orca", () => {
       uiResourceUri: "ui://app",
     });
 
-    expect(runtime).toMatchObject({ viewer: "suppressed", windowOpen: false });
+    expect(runtime).toBeNull();
     expect(vi.mocked(execFile)).not.toHaveBeenCalledWith("orca", expect.any(Array), expect.anything(), expect.anything());
     expect(state.openBrowser).not.toHaveBeenCalled();
-
-    runtime?.close("test-cleanup");
+    expect(state.uiResourceHandler.readUiResource).not.toHaveBeenCalled();
+    expect(state.uiServer).toBeNull();
   });
 });

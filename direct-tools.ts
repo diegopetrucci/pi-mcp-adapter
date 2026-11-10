@@ -10,6 +10,7 @@ import { formatSchema } from "./tool-metadata.ts";
 import { resolveMcpResultContent, transformMcpResourceContents } from "./tool-registrar.ts";
 import { guardMcpOutput, guardedMcpDetails, resolveMcpOutputGuardOptions, scriptPipeHint } from "./mcp-output-guard.ts";
 import { maybeStartUiSession, summarizeUiSessionResult, type UiSessionRuntime } from "./ui-session.ts";
+import { isMcpUiEnabled } from "./ui-viewer-preference.ts";
 import { isServerDisabled } from "./types.ts";
 import { authenticate, supportsOAuth } from "./mcp-auth-flow.ts";
 import { formatAuthRequiredMessage, normalizeToolArguments, resolveServerUrl, withToolCallIdMeta } from "./utils.ts";
@@ -309,7 +310,9 @@ export function createDirectToolExecutor(
         };
       }
 
-      const hasUi = !!spec.uiResourceUri;
+      // UI resources are only opened when MCP Apps UI is opted in; otherwise the
+      // tool behaves exactly like a tool without a UI resource.
+      const hasUi = !!spec.uiResourceUri && isMcpUiEnabled();
       uiSession = hasUi
         ? await maybeStartUiSession(state, {
             serverName: spec.serverName,

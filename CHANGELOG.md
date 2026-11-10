@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- TLH fork: MCP Apps UI is now opt-in. By default the adapter no longer advertises the `io.modelcontextprotocol/ui` client capability and never starts a UI session, opens a browser/Glimpse/Orca window, or posts a notification for a `ui://` tool; such tools return the same result shape as ordinary tools. This matches Claude Code and Codex CLI terminal behaviour, and the capability is optional in the spec with a required text fallback. Set `MCP_UI_VIEWER` to `auto` (the earlier default: Glimpse when available, otherwise the browser), `browser`, `glimpse`, or `orca` to restore UI behaviour; `none` / `off` / `disabled` and any unrecognized value now simply mean off.
+
 ## [5.0.2] - 2026-10-22
 
 ### Changed

@@ -42,7 +42,7 @@ The built-in has two things the adapter doesn't: Pi's permission extensions see 
 | Tool search | `tool_search`, ranked by words | `mcp({ search })` ranked by words or regex. |
 | OAuth tokens | JSON file in `~/.pi/agent` | OS keychain |
 | MCP prompts, elicitation, sampling, Tasks | No | Yes; Tasks need `"protocolVersion": "auto"` |
-| MCP UI apps | Left out | Native window or browser |
+| MCP UI apps | Left out | Off by default like Claude Code and Codex CLI; opt in with `MCP_UI_VIEWER` for a native window or browser |
 | Add a server | `pi mcp add` in a shell, then `/reload` | Add to a config file, or use `/mcp-adapter setup` |
 | Configs from Cursor, Claude Code, Codex, VS Code | Convert by hand | Imported |
 | Guided setup in a session | No; `/mcp` manages servers that are already configured | `/mcp-adapter setup` overlay: imports configs found on your machine, adds presets (Figma desktop and RepoPrompt when installed, GitHub, Notion, Context7, DeepWiki, Parallel Search, Chrome DevTools), and previews each file change before writing |
@@ -181,6 +181,7 @@ On Pi 0.99 and later, servers you already signed in to with Pi's built-in MCP ca
 - Compact MCP result rendering summarizes text, but inline images are still controlled by Pi's image display settings and may render below the compact text summary.
 - Pi still owns one separator row before self-rendered tool output, so compact mode reduces adapter rendering height but cannot promise true zero-gap rows.
 - MCP sampling support is text-only; context inclusion, tools, stop sequences, audio, and image content are rejected with explicit errors.
+- MCP UI apps are off by default: the adapter does not advertise the `io.modelcontextprotocol/ui` capability and `ui://` tools return ordinary inline results. Set `MCP_UI_VIEWER` to `auto` (previously the default), `browser`, `glimpse`, or `orca` to open tool UIs; `none`, `off`, `disabled`, and unknown values keep UI off ([MCP UI integration](https://github.com/nicobailon/pi-mcp-adapter/blob/main/docs/prompts-and-ui.md#mcp-ui-integration)).
 
 ## Documentation
 

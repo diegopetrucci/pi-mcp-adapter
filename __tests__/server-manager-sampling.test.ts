@@ -44,11 +44,13 @@ vi.mock("../npx-resolver.ts", () => ({
 describe("McpServerManager sampling", () => {
   const originalMcpTestCwd = process.env.MCP_TEST_CWD;
   const originalHome = process.env.HOME;
+  const originalUiViewer = process.env.MCP_UI_VIEWER;
 
   beforeEach(() => {
     mocks.clients.length = 0;
     mocks.transports.length = 0;
     mocks.open.mockClear();
+    delete process.env.MCP_UI_VIEWER;
   });
 
   afterEach(() => {
@@ -61,6 +63,11 @@ describe("McpServerManager sampling", () => {
       delete process.env.HOME;
     } else {
       process.env.HOME = originalHome;
+    }
+    if (originalUiViewer === undefined) {
+      delete process.env.MCP_UI_VIEWER;
+    } else {
+      process.env.MCP_UI_VIEWER = originalUiViewer;
     }
     rmSync("/tmp/pi-mcp-cwd", { recursive: true, force: true });
     rmSync("/tmp/pi-mcp-home", { recursive: true, force: true });
@@ -217,13 +224,16 @@ describe("McpServerManager sampling", () => {
     await manager.connect("demo", { command: "node", args: ["server.js"] });
 
     const client = mocks.clients[0];
-    expect(client.options.capabilities).not.toHaveProperty("sampling");
+    // No sampling, elicitation, or MCP Apps UI capability is advertised by default,
+    // so the client options carry no capabilities object at all.
+    expect(client.options).not.toHaveProperty("capabilities");
     expect(client.options.listChanged.tools.onChanged).toBeTypeOf("function");
     expect(client.options.listChanged.resources.onChanged).toBeTypeOf("function");
     expect(client.setRequestHandler).not.toHaveBeenCalled();
   });
 
-  it("passes the MCP Apps capability through legacy and modern client paths", async () => {
+  it("passes the MCP Apps capability through legacy and modern client paths when MCP_UI_VIEWER opts in", async () => {
+    process.env.MCP_UI_VIEWER = "auto";
     const { McpServerManager } = await import("../server-manager.ts");
     const manager = new McpServerManager();
 
@@ -257,6 +267,24 @@ describe("McpServerManager sampling", () => {
       { mode: { pin: "2026-07-28" } },
     ]);
   });
+
+  it.each(["none", "off", "disabled", "browser-and-more"])(
+    "does not advertise the MCP Apps capability for MCP_UI_VIEWER=%s",
+    async (value) => {
+      process.env.MCP_UI_VIEWER = value;
+      const { McpServerManager } = await import("../server-manager.ts");
+      const manager = new McpServerManager();
+
+      await manager.connect("legacy", { command: "node", args: ["server.js"] });
+      await manager.connect("pinned", {
+        command: "node",
+        args: ["server.js"],
+        protocolVersion: "2026-07-28",
+      });
+
+      expect(mocks.clients.map(client => client.options.capabilities)).toEqual([undefined, undefined]);
+    },
+  );
 
   it("refreshes cached lists and ignores notifications from replaced clients", async () => {
     const { McpServerManager } = await import("../server-manager.ts");

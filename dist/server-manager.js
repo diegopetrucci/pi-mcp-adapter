@@ -11,6 +11,7 @@ import { resolveNpxBinary } from "./npx-resolver.js";
 import { createJsonSchemaValidator } from "./json-schema-validator.js";
 import { logger } from "./logger.js";
 import { RESOURCE_MIME_TYPE } from "./ui-app-bridge-helpers.js";
+import { isMcpUiEnabled } from "./ui-viewer-preference.js";
 import { isBuiltInAgentPlugin } from "./agent-plugin-provenance.js";
 import { McpOAuthProvider } from "./mcp-oauth-provider.js";
 import { explainRegistrationRejection, extractOAuthConfig, supportsOAuth } from "./mcp-auth-flow.js";
@@ -1131,12 +1132,13 @@ export class McpServerManager {
         }
     }
     buildClientCapabilities() {
+        // MCP Apps UI is opt-in: terminal hosts do not render UI resources, and the
+        // spec makes the capability optional, so it is only advertised on request.
+        const uiExtension = isMcpUiEnabled()
+            ? { "io.modelcontextprotocol/ui": { mimeTypes: [RESOURCE_MIME_TYPE] } }
+            : undefined;
         return {
-            extensions: {
-                "io.modelcontextprotocol/ui": {
-                    mimeTypes: [RESOURCE_MIME_TYPE],
-                },
-            },
+            ...(uiExtension ? { extensions: uiExtension } : {}),
             ...(this.samplingConfig ? { sampling: {} } : {}),
             ...(this.elicitationConfig
                 ? {

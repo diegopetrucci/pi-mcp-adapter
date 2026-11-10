@@ -24,7 +24,20 @@ Time spent answering a server's prompt does not count against its tool calls' `r
 
 ## MCP UI Integration
 
-MCP servers can ship interactive UIs via the [MCP UI](https://github.com/MCP-UI-Org/mcp-ui) standard. When you call a tool that has a UI resource, the adapter opens it in a native macOS window via [Glimpse](https://github.com/hazat/glimpse) if available, otherwise falls back to the browser.
+MCP servers can ship interactive UIs via the [MCP UI](https://github.com/MCP-UI-Org/mcp-ui) standard. When you call a tool that has a UI resource and UI is enabled, the adapter opens it in a native macOS window via [Glimpse](https://github.com/hazat/glimpse) if available, otherwise falls back to the browser.
+
+**Off by default.** The adapter does not advertise the `io.modelcontextprotocol/ui` client capability and never starts a UI session, opens a browser or native window, or posts a notification unless you opt in by setting `MCP_UI_VIEWER`. This matches terminal hosts such as Claude Code and Codex CLI, which do not render MCP Apps. The capability is optional in the spec, and servers must keep a text fallback, so a tool with a `ui://` resource behaves exactly like an ordinary tool by default: its result has the same shape, with no UI fields on the details.
+
+Opt in with one of these `MCP_UI_VIEWER` values (case-insensitive):
+
+| Value | Behaviour |
+|-------|-----------|
+| `auto` | The earlier default: a Glimpse window on macOS when Glimpse is installed, otherwise the system browser |
+| `browser` | The system browser |
+| `glimpse` | The Glimpse native WKWebView window (macOS; requires `pi install npm:glimpseui`) |
+| `orca` | The [Orca](https://github.com/orca) built-in browser, falling back to the system browser if Orca is unavailable |
+
+Leaving `MCP_UI_VIEWER` unset — or setting it to `none`, `off`, `disabled`, or any other value — keeps MCP Apps UI off. Remote (SSH) sessions get the remote-access hint whenever UI is enabled.
 
 **How it works:**
 
@@ -33,7 +46,7 @@ MCP servers can ship interactive UIs via the [MCP UI](https://github.com/MCP-UI-
 3. pi-mcp-adapter fetches the UI HTML and opens it in an iframe
 4. The UI can call MCP tools and send messages back to the agent
 
-**Native rendering:** On macOS, if [Glimpse](https://github.com/hazat/glimpse) is installed (`pi install npm:glimpseui`), UIs open in a native WKWebView window instead of a browser tab. Set `MCP_UI_VIEWER=browser` to force the browser, `MCP_UI_VIEWER=glimpse` to require native rendering, `MCP_UI_VIEWER=orca` to open in the [Orca](https://github.com/orca) built-in browser (falls back to the system browser if Orca is unavailable), or `MCP_UI_VIEWER=none` (also accepts `off` / `disabled`) to suppress the window entirely — the tool still runs and its inline result is returned to the agent, but no browser or native window opens. This is useful for headless setups, CI, or users who want the tool output delivered inline as text only. When suppressed, a one-line info notification shows the UI URL so it can still be opened manually if needed.
+**Viewer selection (opt-in only):** `MCP_UI_VIEWER=auto` keeps the previous resolution — Glimpse on macOS when installed (`pi install npm:glimpseui`), otherwise the browser. `browser`, `glimpse`, and `orca` force one viewer. In remote sessions the adapter skips Glimpse and prints an SSH port-forward hint instead. With UI off, none of this runs: no capability is advertised, no UI server starts, and no window or notification appears.
 
 **Bidirectional communication:** The UI talks back. When it sends a prompt or intent, the message is stored and `triggerTurn()` wakes the agent. The agent retrieves messages via `mcp({ action: "ui-messages" })` and responds, enabling conversational UIs where the app and agent collaborate in real-time.
 
@@ -81,4 +94,4 @@ npm run build
 npm run install-local
 ```
 
-Restart pi, then ask the agent to show a chart — it calls `show_chart` and opens the UI in Glimpse (macOS) or the browser. Use `npm run uninstall-local` to remove the MCP entry.
+Restart pi, then set `MCP_UI_VIEWER=auto` (or `browser`/`glimpse`/`orca`) and ask the agent to show a chart — it calls `show_chart` and opens the UI in Glimpse (macOS) or the browser. MCP Apps UI is off by default, so nothing opens without that opt-in. Use `npm run uninstall-local` to remove the MCP entry.

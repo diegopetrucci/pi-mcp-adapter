@@ -103,6 +103,7 @@ async function readEvents(logPath: string | undefined): Promise<Array<Record<str
 }
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await Promise.all(managers.splice(0).map((manager) => manager.closeAll()));
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
@@ -236,6 +237,8 @@ describe("MCP 2026-07-28 SDK-native multi-round input flows", () => {
     ["proxy", "ui"],
     ["direct", "ui"],
   ] as const)("shapes missing input handlers as input_required_needs_ui through the %s %s path", async (adapter, kind) => {
+    // MCP Apps UI is opt-in, so the ui:// rows opt into the UI path explicitly.
+    if (kind === "ui") vi.stubEnv("MCP_UI_VIEWER", "browser");
     const resourceUri = kind === "resource" ? "test://mrtr/resource" : "ui://mrtr/resource";
     const tool = kind === "tool"
       ? metadata("needs_ui")
