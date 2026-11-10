@@ -8,6 +8,7 @@ import { McpLifecycleManager } from "./lifecycle.ts";
 import {
   computeServerHash,
   createCachedToolSelectorCandidateIndex,
+  findServerCacheEntry,
   getMissingConfiguredDirectToolServers,
   isServerCacheValid,
   keepOutputShapes,
@@ -18,6 +19,7 @@ import {
   serializePrompts,
   serializeResources,
   serializeTools,
+  tryComputeServerHash,
   type MetadataCache,
   type ServerCacheEntry,
 } from "./metadata-cache.ts";
@@ -27,7 +29,7 @@ import { resourceNameToToolName } from "./resource-tools.ts";
 import { UiResourceHandler } from "./ui-resource-handler.ts";
 import { formatMcpFooterStatus, formatMcpStatus, openUrl, parallelLimit, providerSignInMessage, sanitizeTerminalText } from "./utils.ts";
 import { logger } from "./logger.ts";
-import { defaultIdleTimeoutFor } from "./idle-defaults.ts";
+import { connectsOnFirstUseOnly, defaultIdleTimeoutFor } from "./idle-defaults.ts";
 import { throwIfAborted } from "./abort.ts";
 import { getAuthStorageOptions } from "./mcp-auth.ts";
 import { createOAuthRuntime, hasPendingAuth, shutdownOAuth, type McpOAuthRuntime } from "./mcp-auth-flow.ts";
@@ -307,6 +309,15 @@ export async function initializeMcp(
   const cache = serverEntries.length > 0 ? loadMetadataCache() : null;
   const needsDiscovery = new Set<string>();
   const failedDiscovery = new Set<string>();
+  // Xcode prompts for approval on every new mcpbridge connection, so probing the bridge at startup would
+  // prompt even in sessions that never use Xcode. These connect on first use instead (unless the user set
+  // lifecycle eager/keep-alive, which is not covered here) and record no discovery-failure marker.
+  const firstUseOnlyServers = new Set(
+    serverEntries.filter(([, definition]) => connectsOnFirstUseOnly(definition)).map(([name]) => name),
+  );
+  if (firstUseOnlyServers.size > 0) {
+    logger.debug(`MCP: deferring Xcode bridge server(s) until first use: ${[...firstUseOnlyServers].join(", ")}`);
+  }
 
   const prefix = config.settings?.toolPrefix ?? "server";
   let cachedSelectorCandidateIndex: ToolSelectorCandidateIndex | undefined;
@@ -324,7 +335,8 @@ export async function initializeMcp(
       lifecycle.markKeepAlive(name, definition);
     }
 
-    const cachedEntry = cache?.servers?.[name];
+    // Only this config's entry counts: another checkout's entry for the same server name is a different config.
+    const cachedEntry = findServerCacheEntry(cache, name, tryComputeServerHash(definition, cwd));
     if (cachedEntry && isServerCacheValid(cachedEntry, definition, undefined, cwd)) {
       const hasToolFilters =
         (Array.isArray(definition.includeTools) && definition.includeTools.length > 0) ||
@@ -344,7 +356,7 @@ export async function initializeMcp(
         serverInstructions.set(name, cachedEntry.instructions);
       }
       seedObservedOutputs(state, name, cachedEntry);
-    } else if (cachedEntry?.discoveryFailed && cachedEntry.configHash === tryComputeServerHash(definition, cwd)) {
+    } else if (cachedEntry?.discoveryFailed) {
       // Startup tries a config once; a server that failed is tried again on first use.
       failedDiscovery.add(name);
     } else if (cachedEntry?.cacheScope !== "private") {
@@ -353,6 +365,7 @@ export async function initializeMcp(
   }
 
   const startupServers = serverEntries
+    .filter(([name]) => !firstUseOnlyServers.has(name))
     .filter(([name, definition]) => {
       const mode = definition.lifecycle ?? "lazy";
       return mode === "keep-alive" || mode === "eager" || needsDiscovery.has(name);
@@ -407,7 +420,15 @@ export async function initializeMcp(
     const configHash = tryComputeServerHash(definition, cwd);
     return configHash ? [[name, { configHash, tools: [], resources: [], discoveryFailed: true, cachedAt: Date.now() }]] : [];
   });
-  if (captured.length > 0) saveMetadataCache({ version: 1, servers: Object.fromEntries(captured) }, { startupSnapshot: cache?.servers ?? {} });
+  if (captured.length > 0) {
+    // An empty snapshot still enables the merge: entries another session wrote during the pass must survive.
+    saveMetadataCache({ version: 1, servers: Object.fromEntries(captured) }, {
+      startupSnapshot: {
+        servers: cache?.servers ?? {},
+        ...(cache?.variants !== undefined ? { variants: cache.variants } : {}),
+      },
+    });
+  }
 
   const startupKnownMetadata = new Map<string, ToolMetadata[]>();
   for (const { name, definition, connection } of results) {
@@ -495,7 +516,8 @@ export async function initializeMcp(
     if (missingCacheServers.length > 0) {
       const bootstrapResults = await parallelLimit(
         // Startup already attempted these servers, in this session or in an earlier one that failed.
-        missingCacheServers.filter(name => !failedDiscovery.has(name) && !results.some(r => r.name === name)),
+        // Xcode bridge servers stay untouched until first use, like startup discovery above.
+        missingCacheServers.filter(name => !firstUseOnlyServers.has(name) && !failedDiscovery.has(name) && !results.some(r => r.name === name)),
         10,
         async (name) => {
           try {
@@ -648,7 +670,11 @@ function captureMetadata(
 
   const configHash = computeServerHash(definition, defaultCwd);
   if (connection.definition && computeServerHash(connection.definition, defaultCwd) !== configHash) return undefined;
-  const existingEntry = loadCache()?.servers?.[serverName];
+  const existingEntry = findServerCacheEntry(loadCache(), serverName, configHash);
+  // Only this config's entry can seed a fallback; another checkout's entry for the same name is a different config.
+  const existingValid = existingEntry && isServerCacheValid(existingEntry, definition, undefined, defaultCwd)
+    ? existingEntry
+    : undefined;
 
   const tools = serializeTools(connection.tools);
   let resources = definition.exposeResources === false ? [] : serializeResources(connection.resources);
@@ -661,16 +687,14 @@ function captureMetadata(
   const prompts = connection.promptDiscoveryFailed
     ? sessionFallback
       ? sessionFallback.prompts
-      : existingEntry?.configHash === configHash && isServerCacheValid(existingEntry, definition, undefined, defaultCwd)
-        ? existingEntry.prompts
-        : undefined
+      : existingValid?.prompts
     : serializePrompts(connection.prompts ?? []);
 
   if (definition.exposeResources !== false && connection.resourceDiscoveryFailed === true) {
     if (sessionFallback) {
       resources = sessionFallback.resources ?? [];
-    } else if (existingEntry?.resources?.length && isServerCacheValid(existingEntry, definition, undefined, defaultCwd)) {
-      resources = existingEntry.resources;
+    } else if (existingValid?.resources?.length) {
+      resources = existingValid.resources;
     }
   }
 
@@ -803,13 +827,4 @@ function getEffectiveIdleTimeoutMinutes(state: McpExtensionState, serverName: st
   const defaultIdle = defaultIdleTimeoutFor(definition);
   if (defaultIdle !== undefined) return defaultIdle;
   return typeof state.config.settings?.idleTimeout === "number" ? state.config.settings.idleTimeout : 10;
-}
-
-/** The config hash, or undefined when the config can't be resolved yet (for example a missing env var in the URL). */
-function tryComputeServerHash(definition: ServerEntry, defaultCwd?: string): string | undefined {
-  try {
-    return computeServerHash(definition, defaultCwd);
-  } catch {
-    return undefined;
-  }
 }

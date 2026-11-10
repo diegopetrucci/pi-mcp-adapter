@@ -28,6 +28,7 @@ vi.mock("../config.ts", async (importOriginal) => ({
 vi.mock("../metadata-cache.ts", async (importOriginal) => ({
   ...await importOriginal<typeof import("../metadata-cache.ts")>(),
   computeServerHash: vi.fn(() => "hash"),
+  tryComputeServerHash: vi.fn(() => "hash"),
   createCachedToolSelectorCandidateIndex: mocks.createCachedToolSelectorCandidateIndex,
   getMissingConfiguredDirectToolServers: mocks.getMissingConfiguredDirectToolServers,
   isServerCacheValid: mocks.isServerCacheValid,

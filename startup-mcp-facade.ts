@@ -5,8 +5,8 @@ import { createToolSelectorCandidateIndex, formatToolName, getToolNameCandidates
 import type { MetadataCache } from "./metadata-cache.ts";
 import {
   getMissingConfiguredDirectToolServers,
-  isServerCacheValid,
   parseDirectToolSelectors,
+  resolveServerCacheEntry,
 } from "./metadata-cache.ts";
 import { resourceNameToToolName } from "./resource-tools.ts";
 import {
@@ -106,8 +106,8 @@ export function resolveDirectTools(
 
   for (const [serverName, definition] of Object.entries(config.mcpServers)) {
     if (isServerDisabled(definition)) continue;
-    const serverCache = cache.servers[serverName];
-    if (!serverCache || !isServerCacheValid(serverCache, definition, 0, defaultCwd ?? process.env)) continue;
+    const serverCache = resolveServerCacheEntry(cache, serverName, definition, 0, defaultCwd ?? process.env);
+    if (!serverCache) continue;
 
     let toolFilter: true | string[] | false = false;
     let lazy = false;
@@ -139,8 +139,9 @@ export function resolveDirectTools(
     if (hasToolFilters && !selectorCandidateIndex) {
       const candidates = new Set<string>();
       for (const [otherServerName, otherDefinition] of Object.entries(config.mcpServers)) {
-        const otherCache = cache.servers[otherServerName];
-        if (!otherCache || !isServerCacheValid(otherCache, otherDefinition, 0, defaultCwd ?? process.env) || isServerDisabled(otherDefinition)) continue;
+        if (isServerDisabled(otherDefinition)) continue;
+        const otherCache = resolveServerCacheEntry(cache, otherServerName, otherDefinition, 0, defaultCwd ?? process.env);
+        if (!otherCache) continue;
         const otherPrefix = resolveToolPrefix(otherDefinition, prefix);
         for (const otherTool of otherCache.tools ?? []) {
           if (!isUiToolVisibleToModel(otherTool.uiVisibility)) continue;

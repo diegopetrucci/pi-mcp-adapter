@@ -32,7 +32,7 @@ import {
 } from "./config.ts";
 import { markKeepAliveAfterConnect, notifyToolMetadataUpdated, updateMetadataCache, updateStatusBar, getFailureAgeSeconds, getFailureMessage, clearFailure, recordFailure } from "./init.ts";
 import { isServerInActiveFailureBackoff } from "./failure-backoff.ts";
-import { loadMetadataCache, reconstructPromptMetadata } from "./metadata-cache.ts";
+import { findServerCacheEntry, loadMetadataCache, reconstructPromptMetadata, tryComputeServerHash } from "./metadata-cache.ts";
 import { buildToolMetadata } from "./tool-metadata.ts";
 import { supportsOAuth, authenticate, removeAuth, type McpOAuthRuntime } from "./mcp-auth-flow.ts";
 import { getAuthStorageOptions, inspectAuthForUrl } from "./mcp-auth.ts";
@@ -789,7 +789,9 @@ function buildMcpPanelCallbacks(
       ?? authStatusFailures.get(serverName) ?? getFailureMessage(state, serverName),
     refreshCacheAfterReconnect: (serverName: string) => {
       const freshCache = loadMetadataCache();
-      return freshCache?.servers?.[serverName] ?? null;
+      const definition = config.mcpServers[serverName];
+      return findServerCacheEntry(freshCache, serverName, definition ? tryComputeServerHash(definition, ctx.cwd) : undefined)
+        ?? null;
     },
   };
 }

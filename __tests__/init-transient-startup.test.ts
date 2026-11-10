@@ -15,6 +15,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../metadata-cache.ts", () => ({
   computeServerHash: vi.fn(() => "hash"),
   createCachedToolSelectorCandidateIndex: vi.fn(() => undefined),
+  findServerCacheEntry: vi.fn((cache: any, serverName: string, configHash: string | undefined) => {
+    const entry = cache?.servers?.[serverName];
+    return entry && entry.configHash === configHash ? entry : undefined;
+  }),
+  tryComputeServerHash: vi.fn(() => "hash"),
   getMissingConfiguredDirectToolServers: vi.fn(() => [] as string[]),
   isServerCacheValid: vi.fn(() => false),
   loadMetadataCache: vi.fn(() => mocks.cache),

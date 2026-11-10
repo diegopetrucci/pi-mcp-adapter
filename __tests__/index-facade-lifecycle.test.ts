@@ -110,7 +110,8 @@ describe("index facade lifecycle", () => {
       setPiMcpConfigEnabled: vi.fn(),
       discoverConfiguredClaudePluginSkills: vi.fn(() => []),
     }));
-    vi.doMock("../metadata-cache.ts", () => ({
+    vi.doMock("../metadata-cache.ts", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../metadata-cache.ts")>()),
       loadMetadataCache,
       getMissingConfiguredDirectToolServers,
     }));

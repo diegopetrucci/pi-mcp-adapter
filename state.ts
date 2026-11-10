@@ -34,6 +34,7 @@ export interface McpExtensionState {
   manager: McpServerManager;
   lifecycle: McpLifecycleManager;
   toolMetadata: Map<string, ToolMetadata[]>;
+  /** This session's cache entry per server name; its config hash decides which persisted entry it may overlay. */
   sessionMetadata?: Map<string, ServerCacheEntry>;
   /** Number of tools currently registered directly with Pi, by server. */
   directToolCounts: Map<string, number>;

@@ -6,7 +6,7 @@ import { getToolNameCandidates, isServerDisabled, isToolAllowed, resolveToolPref
 import type { McpConfig, McpPanelCallbacks, McpPanelResult, ServerEntry, ServerProvenance, ToolPrefix } from "./types.ts";
 import { resourceNameToToolName } from "./resource-tools.ts";
 import { sanitizeTerminalText, stripOscSequences } from "./utils.ts";
-import { isServerCacheValid, type MetadataCache, type ServerCacheEntry, type CachedTool } from "./metadata-cache.ts";
+import { resolveServerCacheEntry, setServerCacheEntry, type MetadataCache, type ServerCacheEntry, type CachedTool } from "./metadata-cache.ts";
 import { isUiToolVisibleToModel } from "./ui-tool-visibility.ts";
 
 function fuzzyScore(query: string, text: string): number {
@@ -496,8 +496,7 @@ class McpPanel {
     for (const [serverName, definition] of Object.entries(config.mcpServers)) {
       if (this.authOnly && !callbacks.canAuthenticate(serverName)) continue;
       const prov = provenance.get(serverName);
-      const cachedEntry = this.cache?.servers?.[serverName];
-      const serverCache = cachedEntry && isServerCacheValid(cachedEntry, definition, undefined, this.cwd) ? cachedEntry : undefined;
+      const serverCache = resolveServerCacheEntry(this.cache, serverName, definition, undefined, this.cwd ?? process.env);
 
       const globalDirect = config.settings?.directTools;
       let toolFilter: true | string[] | false = false;
@@ -930,7 +929,7 @@ class McpPanel {
         const entry = this.callbacks.refreshCacheAfterReconnect(server.name);
         if (entry) {
           this.cache ??= { version: 1, servers: {} };
-          this.cache.servers[server.name] = entry;
+          setServerCacheEntry(this.cache, server.name, entry);
           server.summary = serverDescription(this.config.mcpServers[server.name], entry);
           this.rebuildServerTools(server, entry);
           server.hasCachedData = true;
@@ -1026,10 +1025,9 @@ class McpPanel {
     const candidates = new Set<string>();
     for (const [otherServerName, otherDefinition] of Object.entries(this.config.mcpServers)) {
       if (isServerDisabled(otherDefinition)) continue;
-      const cachedEntry = this.cache?.servers?.[otherServerName];
       const entry = otherServerName === serverName
         ? currentEntry
-        : cachedEntry && isServerCacheValid(cachedEntry, otherDefinition, undefined, this.cwd) ? cachedEntry : undefined;
+        : resolveServerCacheEntry(this.cache, otherServerName, otherDefinition, undefined, this.cwd ?? process.env);
       if (!entry) continue;
       const otherPrefix = resolveToolPrefix(otherDefinition, this.prefix);
       for (const tool of entry.tools ?? []) {

@@ -836,7 +836,18 @@ export interface ServerCacheEntry {
 
 export interface MetadataCache {
   version: number;
+  /**
+   * The primary cache slot per server name: its newest entry, whatever config produced it. Older adapters
+   * (5.0.x/5.1.x) only read and rewrite this slot, so it must stay a plain entry object.
+   */
   servers: Record<string, ServerCacheEntry>;
+  /**
+   * The remaining entries per server name, keyed by config hash. `computeServerHash` includes the session cwd
+   * for stdio servers without an explicit `cwd`, so several checkouts of one repo produce several hashes for
+   * the same server name; keeping them apart stops each checkout from overwriting the others' entry. Readers
+   * must resolve an entry by config hash instead of reading `servers[name]` directly.
+   */
+  variants?: Record<string, Record<string, ServerCacheEntry>>;
 }
 
 export interface McpPanelCallbacks {

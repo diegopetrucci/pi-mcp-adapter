@@ -9,7 +9,13 @@ import { createToolSelectorCandidateIndex, formatPromptCommandName, formatToolNa
 import { resourceNameToToolName } from "./resource-tools.js";
 import { extractToolAnnotations, extractToolUiStreamMode, interpolateEnvRecord, interpolateEnvVars, resolveBearerToken, resolveConfigPath, resolveServerUrl, stableStringify, } from "./utils.js";
 import { extractUiToolVisibility, isUiToolVisibleToModel } from "./ui-tool-visibility.js";
+// Stays 1 although entries are now per config: `servers[name]` keeps its entry-object shape, and the extra entries
+// live in an optional top-level map older adapters ignore. A version bump would make 5.0.x/5.1.x discard the file
+// outright (`version !== 1` reads as corrupt) and rewrite it from scratch, which is a bigger loss than the extra
+// entries they already cannot represent.
 const CACHE_VERSION = 1;
+// One entry per server config, so a few checkouts of the same repo can keep their stdio entries side by side.
+const MAX_ENTRIES_PER_SERVER = 8;
 export function getMetadataCachePath() {
     return getAgentPath("mcp-cache.json");
 }
@@ -25,63 +31,196 @@ export function loadMetadataCache() {
             return null;
         if (!raw.servers || typeof raw.servers !== "object")
             return null;
-        return raw;
+        const slots = normalizeCacheSlots({
+            servers: raw.servers,
+            ...(raw.variants !== undefined ? { variants: raw.variants } : {}),
+        });
+        return {
+            version: CACHE_VERSION,
+            servers: slots.servers,
+            ...(slots.variants !== undefined && Object.keys(slots.variants).length > 0 ? { variants: slots.variants } : {}),
+        };
     }
     catch {
         return null;
     }
 }
 export function saveMetadataCache(cache, options = {}) {
-    updateMetadataCacheFile(servers => {
-        const next = { ...servers };
+    const snapshot = options.startupSnapshot === undefined ? undefined : toCacheSnapshot(options.startupSnapshot);
+    updateMetadataCacheFile(state => {
         for (const [name, entry] of Object.entries(cache.servers)) {
+            // Everything here works on the config's own hash, so another checkout's entry for the same server name is
+            // never treated as this config's disk state.
+            const disk = findServerCacheEntry(state, name, entry.configHash);
             // Startup batch: a catalog is written unless disk has a newer catalog for the same config, and keeps output shapes
-            // saved meanwhile. A failure marker is written only if disk is unchanged since the startup snapshot, so it never
-            // destroys what another session wrote during the pass.
-            const disk = servers[name];
-            if (!options.startupSnapshot) {
-                next[name] = entry;
+            // saved meanwhile. A failure marker is written only if that config's disk entry is unchanged since the startup
+            // snapshot, so it does not discard what another session wrote before the pass.
+            if (!snapshot) {
+                setServerCacheEntry(state, name, entry);
             }
             else if (entry.discoveryFailed) {
-                if (JSON.stringify(disk) === JSON.stringify(options.startupSnapshot[name]))
-                    next[name] = entry;
+                const snapshotEntry = findServerCacheEntry(snapshot, name, entry.configHash);
+                if (sameCacheEntry(disk, snapshotEntry))
+                    setServerCacheEntry(state, name, entry);
             }
-            else if (disk && !disk.discoveryFailed && disk.configHash === entry.configHash) {
+            else if (disk && !disk.discoveryFailed) {
                 if ((disk.cachedAt ?? 0) > entry.cachedAt)
                     continue;
                 const outputShapes = { ...entry.outputShapes, ...keepOutputShapes(disk, entry.configHash, entry.tools) };
-                next[name] = Object.keys(outputShapes).length > 0 ? { ...entry, outputShapes } : entry;
+                setServerCacheEntry(state, name, Object.keys(outputShapes).length > 0 ? { ...entry, outputShapes } : entry);
             }
             else {
-                next[name] = entry;
+                setServerCacheEntry(state, name, entry);
             }
         }
-        return next;
+        return state;
     });
+}
+function sameCacheEntry(a, b) {
+    return JSON.stringify(a) === JSON.stringify(b);
+}
+function toCacheSnapshot(source) {
+    const servers = source.servers;
+    // A cache entry always carries a configHash, so a "servers" key holding one is a server of that name, not a snapshot.
+    const isSlots = servers !== undefined
+        && typeof servers === "object"
+        && typeof servers.configHash !== "string";
+    if (!isSlots)
+        return { servers: source };
+    const variants = source.variants;
+    return { servers: servers, ...(variants !== undefined ? { variants } : {}) };
 }
 /** Reads the cache file, applies one update, and writes the result; an update returning undefined skips the write. */
 function updateMetadataCacheFile(update) {
     const cachePath = getMetadataCachePath();
     const dir = dirname(cachePath);
     mkdirSync(dir, { recursive: true });
-    let servers = {};
+    let state = { servers: {}, variants: {} };
     try {
         if (existsSync(cachePath)) {
             const existing = JSON.parse(readFileSync(cachePath, "utf-8"));
             if (existing && existing.version === CACHE_VERSION && existing.servers) {
-                servers = { ...existing.servers };
+                state = normalizeCacheSlots({
+                    servers: existing.servers,
+                    ...(existing.variants !== undefined ? { variants: existing.variants } : {}),
+                });
             }
         }
     }
     catch {
         // Ignore parse errors and proceed with empty cache
     }
-    const next = update(servers);
+    const next = update(state);
     if (!next)
         return;
+    // The update sees the same read the write replaces, so entries another session wrote earlier are kept.
+    // There is no cross-process lock, so two writes in the same instant can still lose one entry, which is
+    // rediscovered on next use (pre-existing behavior, unchanged here).
+    const slots = normalizeCacheSlots(next);
+    const payload = { version: CACHE_VERSION, servers: slots.servers };
+    if (slots.variants !== undefined && Object.keys(slots.variants).length > 0)
+        payload.variants = slots.variants;
     const tmpPath = `${cachePath}.${process.pid}.tmp`;
-    writeFileSync(tmpPath, JSON.stringify({ version: CACHE_VERSION, servers: next }), "utf-8");
+    writeFileSync(tmpPath, JSON.stringify(payload), "utf-8");
     renameSync(tmpPath, cachePath);
+}
+/**
+ * Entries cached for one server name: the primary slot first, then its config variants.
+ * The primary slot is kept for older adapters that only know that slot; readers should resolve by hash.
+ */
+export function serverCacheEntries(cache, serverName) {
+    return collectServerCacheEntries(cache, serverName);
+}
+/** The entry cached for this exact config hash, without any validity check. */
+export function findServerCacheEntry(cache, serverName, configHash) {
+    if (!configHash)
+        return undefined;
+    return collectServerCacheEntries(cache, serverName).find(entry => entry.configHash === configHash);
+}
+/**
+ * The cached entry for the definition's current config, when it is still usable: same config hash, cached,
+ * not authorization-scoped, not a failure marker, and within the declared TTL.
+ */
+export function resolveServerCacheEntry(cache, serverName, definition, maxAgeMs = 0, environmentOrCwd = process.env) {
+    const configHash = tryComputeServerHash(definition, environmentOrCwd);
+    const entry = findServerCacheEntry(cache, serverName, configHash);
+    return entry && isServerCacheValid(entry, definition, maxAgeMs, environmentOrCwd) ? entry : undefined;
+}
+/**
+ * Stores an entry under its own config hash and updates the primary slot to the newest entry, keeping the other
+ * configs' entries as variants and dropping the oldest once a server holds more than `MAX_ENTRIES_PER_SERVER`.
+ * Mutates `cache`.
+ */
+export function setServerCacheEntry(cache, serverName, entry) {
+    writeServerCacheSlots(cache, serverName, [
+        entry,
+        ...collectServerCacheEntries(cache, serverName).filter(existing => existing.configHash !== entry.configHash),
+    ]);
+}
+function collectServerCacheEntries(cache, serverName) {
+    if (!cache)
+        return [];
+    const primary = cache.servers?.[serverName];
+    const variants = cache.variants?.[serverName];
+    const entries = primary ? [primary] : [];
+    if (variants && typeof variants === "object") {
+        for (const variant of Object.values(variants)) {
+            if (variant && typeof variant === "object" && variant.configHash !== primary?.configHash)
+                entries.push(variant);
+        }
+    }
+    return entries;
+}
+/** Writes one server's entries as slots: newest in the primary slot, the rest keyed by config hash. */
+function writeServerCacheSlots(cache, serverName, entries) {
+    const byHash = new Map();
+    for (const entry of entries) {
+        if (!entry || typeof entry !== "object" || typeof entry.configHash !== "string")
+            continue;
+        if (!byHash.has(entry.configHash))
+            byHash.set(entry.configHash, entry);
+    }
+    // Newest first; the order of equal timestamps is the caller's (the entry being written comes first).
+    const [primary, ...variants] = [...byHash.values()]
+        .sort((a, b) => (b.cachedAt ?? 0) - (a.cachedAt ?? 0))
+        .slice(0, MAX_ENTRIES_PER_SERVER);
+    if (primary === undefined)
+        delete cache.servers[serverName];
+    else
+        cache.servers[serverName] = primary;
+    if (variants.length === 0) {
+        if (cache.variants)
+            delete cache.variants[serverName];
+        return;
+    }
+    cache.variants ??= {};
+    cache.variants[serverName] = Object.fromEntries(variants.map(entry => [entry.configHash, entry]));
+}
+/** Rebuilds every server's slots, dropping malformed, duplicate, and over-cap entries. */
+function normalizeCacheSlots(source) {
+    const slots = { servers: {}, variants: {} };
+    const names = new Set([
+        ...Object.keys(source.servers ?? {}),
+        ...Object.keys(source.variants ?? {}),
+    ]);
+    for (const name of names) {
+        const primary = source.servers?.[name];
+        const variants = source.variants?.[name];
+        const entries = primary ? [primary] : [];
+        if (variants && typeof variants === "object")
+            entries.push(...Object.values(variants));
+        writeServerCacheSlots(slots, name, entries);
+    }
+    return slots;
+}
+/** The config hash, or undefined when the config can't be resolved yet (for example a missing env var in the URL). */
+export function tryComputeServerHash(definition, environmentOrCwd = process.env) {
+    try {
+        return computeServerHash(definition, environmentOrCwd);
+    }
+    catch {
+        return undefined;
+    }
 }
 function normalizeHashEnvironment(value) {
     if (typeof value === "string")
@@ -138,12 +277,13 @@ export function outputShapeKey(tool) {
  */
 export function saveObservedOutput(serverName, definition, toolName, toolKey, output, defaultCwd) {
     const configHash = computeServerHash(definition, defaultCwd ?? process.env);
-    updateMetadataCacheFile(servers => {
-        const entry = servers[serverName];
+    updateMetadataCacheFile(state => {
+        const entry = findServerCacheEntry(state, serverName, configHash);
         const cachedTool = entry?.tools?.find(tool => tool.name === toolName);
-        if (!entry || !cachedTool || entry.configHash !== configHash || outputShapeKey(cachedTool) !== toolKey)
+        if (!entry || !cachedTool || outputShapeKey(cachedTool) !== toolKey)
             return undefined;
-        return { ...servers, [serverName]: { ...entry, outputShapes: { ...entry.outputShapes, [toolName]: output } } };
+        setServerCacheEntry(state, serverName, { ...entry, outputShapes: { ...entry.outputShapes, [toolName]: output } });
+        return state;
     });
 }
 /** Output shapes to carry into a rewritten cache entry: same config, not private, and only tools whose definition kept its shape key. */
@@ -223,8 +363,7 @@ export function getMissingConfiguredDirectToolServers(config, cache, envOverride
                 : !!globalDirect;
         if (!hasDirectTools)
             continue;
-        const serverCache = cache?.servers?.[serverName];
-        if (!serverCache || !isServerCacheValid(serverCache, definition, undefined, defaultCwd)) {
+        if (!resolveServerCacheEntry(cache, serverName, definition, undefined, defaultCwd ?? process.env)) {
             missing.push(serverName);
         }
     }
@@ -285,8 +424,10 @@ export function reconstructToolMetadata(serverName, entry, prefix, definition, c
 export function createCachedToolSelectorCandidateIndex(configuredServers, cache, prefix, defaultCwd) {
     const candidates = new Set();
     for (const [serverName, definition] of Object.entries(configuredServers)) {
-        const entry = cache.servers[serverName];
-        if (!entry || !isServerCacheValid(entry, definition, undefined, defaultCwd) || isServerDisabled(definition))
+        if (isServerDisabled(definition))
+            continue;
+        const entry = resolveServerCacheEntry(cache, serverName, definition, undefined, defaultCwd ?? process.env);
+        if (!entry)
             continue;
         const effectivePrefix = resolveToolPrefix(definition, prefix);
         for (const tool of entry.tools ?? []) {

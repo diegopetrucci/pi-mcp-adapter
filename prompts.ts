@@ -6,7 +6,7 @@ import type {
 import type { McpExtensionState } from "./state.ts";
 import { isServerDisabled, type McpConfig, type PromptMetadata } from "./types.ts";
 import { formatPromptCommandName } from "./types.ts";
-import { isServerCacheValid, loadMetadataCache, reconstructPromptMetadata } from "./metadata-cache.ts";
+import { loadMetadataCache, reconstructPromptMetadata, resolveServerCacheEntry } from "./metadata-cache.ts";
 import { logger } from "./logger.ts";
 import { truncateAtWord } from "./utils.ts";
 
@@ -22,10 +22,11 @@ export function resolveCachedPrompts(config: McpConfig, defaultCwd?: string): Pr
   const prefix = config.settings?.toolPrefix ?? "server";
   const specs: PromptMetadata[] = [];
 
-  for (const [serverName, entry] of Object.entries(cache.servers)) {
+  for (const serverName of Object.keys(cache.servers)) {
     const definition = config.mcpServers[serverName];
     if (!definition || isServerDisabled(definition)) continue;
-    if (!entry?.prompts?.length || !isServerCacheValid(entry, definition, undefined, defaultCwd)) continue;
+    const entry = resolveServerCacheEntry(cache, serverName, definition, undefined, defaultCwd ?? process.env);
+    if (!entry?.prompts?.length) continue;
     specs.push(...reconstructPromptMetadata(serverName, entry.prompts, prefix, definition));
   }
 
