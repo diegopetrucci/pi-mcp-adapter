@@ -7,9 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.1.0] - 2026-11-10
+
 ### Changed
 
 - TLH fork: MCP Apps UI is now opt-in. By default the adapter no longer advertises the `io.modelcontextprotocol/ui` client capability and never starts a UI session, opens a browser/Glimpse/Orca window, or posts a notification for a `ui://` tool; such tools return the same result shape as ordinary tools. This matches Claude Code and Codex CLI terminal behaviour, and the capability is optional in the spec with a required text fallback. Set `MCP_UI_VIEWER` to `auto` (the earlier default: Glimpse when available, otherwise the browser), `browser`, `glimpse`, or `orca` to restore UI behaviour; `none` / `off` / `disabled` and any unrecognized value now simply mean off.
+
+### TLH fork notes - v5.1.0
+
+- Fork-only minor release shipping [#25](https://github.com/diegopetrucci/pi-mcp-adapter/pull/25) (MCP Apps UI off by default, `MCP_UI_VIEWER` opt-in); no upstream changes are adopted and the upstream intake history/ledger is unchanged.
+- Minor (not patch) because a user-visible default changed: MCP Apps UI is off unless `MCP_UI_VIEWER` opts in, and `MCP_UI_VIEWER=auto` restores the earlier behaviour.
+- Node engine requirement is unchanged from 5.0.2: `^22.23.4 || ^24.22.1 || ^26.12.1`. The patched-Node runtime guard from #19 is retained.
+- Install pin for TLH automation: `pi install npm:@diegopetrucci/pi-mcp-adapter@5.1.0`.
+- Tag and publish evidence: pending (to be filled after publication).
 
 ## [5.0.2] - 2026-10-22
 

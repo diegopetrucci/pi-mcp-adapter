@@ -47,10 +47,10 @@ describe("TLH package identity and release evidence", () => {
     const exactInstall = `pi install npm:${packageJson.name}@${packageJson.version}`;
 
     expect(packageJson.name).toBe("@diegopetrucci/pi-mcp-adapter");
-    expect(packageJson.version).toBe("5.0.2");
+    expect(packageJson.version).toBe("5.1.0");
     expect(packageJson.publishConfig).toMatchObject({ access: "public" });
     expect(readme).toContain(exactInstall);
-    expect(readme.match(/pi install npm:@diegopetrucci\/pi-mcp-adapter@5\.0\.2/g)).toHaveLength(1);
+    expect(readme.match(/pi install npm:@diegopetrucci\/pi-mcp-adapter@5\.1\.0/g)).toHaveLength(1);
     expect(readme).toContain("The adapter does not modify Pi's user or project settings");
     expect(readme).not.toContain("turns Pi's built-in MCP off in Pi's settings");
   });
@@ -68,6 +68,8 @@ describe("TLH package identity and release evidence", () => {
     expect(changelog).toContain("pi install npm:@diegopetrucci/pi-mcp-adapter@5.0.1");
     expect(changelog).toContain("## [5.0.2] - 2026-10-22");
     expect(changelog).toContain("pi install npm:@diegopetrucci/pi-mcp-adapter@5.0.2");
+    expect(changelog).toContain("## [5.1.0] - 2026-11-10");
+    expect(changelog).toContain("pi install npm:@diegopetrucci/pi-mcp-adapter@5.1.0");
     expect(changelog).toContain("The adapter does not modify Pi's user or project settings");
     expect(changelog).toContain("docs/UPSTREAM-SYNC.md");
   });
