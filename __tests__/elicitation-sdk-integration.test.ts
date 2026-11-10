@@ -63,6 +63,7 @@ describe("elicitation with the real MCP SDK", () => {
   beforeEach(() => mocks.open.mockClear());
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     await Promise.all(managers.splice(0).map(manager => manager.closeAll()));
   });
 
@@ -153,6 +154,8 @@ describe("elicitation with the real MCP SDK", () => {
     ["proxy UI resource", { originalName: "app", uiResourceUri: "ui://url-required" }, "proxy"],
     ["direct UI resource", { originalName: "app", uiResourceUri: "ui://url-required" }, "direct"],
   ] as const)("handles real -32042 errors from a %s", async (_label, spec, adapter) => {
+    // The ui:// rows surface -32042 through the UI resource read, which is opt-in.
+    if ("uiResourceUri" in spec) vi.stubEnv("MCP_UI_VIEWER", "browser");
     const { manager } = await createConnectedManager("tui", ["Open"]);
     const metadata: ToolMetadata = {
       name: `real_${spec.originalName}`,

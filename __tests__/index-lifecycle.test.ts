@@ -2977,7 +2977,8 @@ describe("mcpAdapter session lifecycle", () => {
   it("executes retained B and refreshed A registrations with their owning metadata", async () => {
     // The real UI-session path is exercised below, but its lower transport is
     // a local mock so this proof cannot open a browser or bind a listener.
-    process.env.MCP_UI_VIEWER = "none";
+    // MCP Apps UI is opt-in, so this proof opts in explicitly.
+    process.env.MCP_UI_VIEWER = "browser";
     const a = { command: "a", directTools: true, lifecycle: "eager" };
     const b = { command: "b", directTools: true, lifecycle: "eager" };
     const config: any = { settings: { freezeDirectTools: true }, mcpServers: { a, b } };

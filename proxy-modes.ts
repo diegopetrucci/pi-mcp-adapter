@@ -14,6 +14,7 @@ import { reconstructPromptMetadata } from "./metadata-cache.ts";
 import { resolveMcpResultContent, transformMcpResourceContents } from "./tool-registrar.ts";
 import { guardMcpOutput, guardedMcpDetails, resolveMcpOutputGuardOptions, scriptPipeHint } from "./mcp-output-guard.ts";
 import { maybeStartUiSession, summarizeUiSessionResult, type UiSessionRuntime } from "./ui-session.ts";
+import { isMcpUiEnabled } from "./ui-viewer-preference.ts";
 import { formatAuthRequiredMessage, formatMcpStatus, normalizeToolArguments, resolveServerUrl, truncateAtWord, withToolCallIdMeta } from "./utils.ts";
 import { authenticate, completeAuthFromInput, getAuthStatus, startAuth, supportsOAuth } from "./mcp-auth-flow.ts";
 import { SessionRecoveryAuthRequiredError, withSessionRecovery } from "./session-recovery.ts";
@@ -1545,6 +1546,9 @@ export async function executeCall(
   }
 
   let uiSession: UiSessionRuntime | null = null;
+  // UI resources are only opened when MCP Apps UI is opted in; otherwise the tool
+  // returns the same result shape as a tool without a UI resource.
+  const uiEnabled = Boolean(toolMeta.uiResourceUri) && isMcpUiEnabled();
   const requestOptions = withUiProgressBridge(
     state.manager.getRequestOptions?.(serverName, ownedSignal) ?? (ownedSignal ? { signal: ownedSignal } : undefined),
     state.ui,
@@ -1643,12 +1647,12 @@ export async function executeCall(
       };
     }
 
-    uiSession = toolMeta.uiResourceUri
+    uiSession = uiEnabled
       ? await maybeStartUiSession(state, {
           serverName,
           toolName: toolMeta.originalName,
           toolArgs: normalizedArgs,
-          uiResourceUri: toolMeta.uiResourceUri,
+          uiResourceUri: toolMeta.uiResourceUri!,
           ...(toolMeta.uiStreamMode !== undefined ? { streamMode: toolMeta.uiStreamMode } : {}),
           ...(signal ? { signal } : {}),
           onNeedsAuth: recoverAuthConnection,
@@ -1685,7 +1689,7 @@ export async function executeCall(
     );
     if (!result.isError) recordOutput(result as Record<string, unknown>);
 
-    if (toolMeta.uiResourceUri) {
+    if (uiEnabled) {
       uiSession?.sendToolResult(result as unknown as import("@modelcontextprotocol/client").CallToolResult);
     }
 
@@ -1695,7 +1699,7 @@ export async function executeCall(
       return { content: [], details: { mode: "call", ...callIdentity } };
     }
 
-    if (toolMeta.uiResourceUri) {
+    if (uiEnabled) {
       if (result.isError) {
         const content = resolveMcpResultContent(result as Record<string, unknown>, state.owner?.signal);
         const outputContent = content.length > 0 ? content : [{ type: "text" as const, text: "(empty result)" }];

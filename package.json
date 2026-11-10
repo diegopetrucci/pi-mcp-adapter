@@ -153,6 +153,7 @@
     "consent-manager.ts",
     "ui-server.ts",
     "glimpse-ui.ts",
+    "ui-viewer-preference.ts",
     "npx-resolver.ts",
     "oauth-handler.ts",
     "oauth.ts",
