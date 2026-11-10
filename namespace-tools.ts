@@ -2,7 +2,7 @@ import type { AgentToolResult, ExtensionAPI, ToolInfo } from "@earendil-works/pi
 import { Type } from "typebox";
 import type { McpExtensionState } from "./state.ts";
 import { isServerDisabled, type McpConfig } from "./types.ts";
-import { isServerCacheValid, type MetadataCache } from "./metadata-cache.ts";
+import { resolveServerCacheEntry, type MetadataCache } from "./metadata-cache.ts";
 import { createMcpProxyToolCallRenderer, createMcpToolResultRenderer, resolveMcpToolRenderOptions, type McpToolRenderOptions, type RenderTheme, type McpToolRenderContext } from "./tool-result-renderer.ts";
 export { namespaceProxyName } from "./mcp-references.ts";
 import { hasCallableCachedTargets, isMcpServerDirectlyRegistered, namespaceProxyName, type DirectToolSelectorOverride } from "./mcp-references.ts";
@@ -40,8 +40,8 @@ function namespaceProxyCandidate(
   const definition = config.mcpServers[serverName];
   if (!definition || isServerDisabled(definition)) return null;
   if (isMcpServerDirectlyRegistered(definition, config.settings, serverName, envOverride)) return null;
-  const entry = cache.servers?.[serverName];
-  if (!entry || !isServerCacheValid(entry, definition, undefined, defaultCwd) || !hasCallableCachedTargets(entry, definition)) return null;
+  const entry = resolveServerCacheEntry(cache, serverName, definition, undefined, defaultCwd ?? process.env);
+  if (!entry || !hasCallableCachedTargets(entry, definition)) return null;
   const toolName = namespaceProxyName(serverName);
   if (existingDirectNames.has(toolName)) return null;
   return {

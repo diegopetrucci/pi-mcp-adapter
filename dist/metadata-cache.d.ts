@@ -1,11 +1,35 @@
 import type { CachedPrompt, CachedResource, CachedTool, McpConfig, McpTool, McpResource, McpPrompt, MetadataCache, ServerCacheEntry, ServerEntry, ToolMetadata, PromptMetadata } from "./types.ts";
 import { type ToolPrefix, type ToolSelectorCandidateIndex } from "./types.ts";
+/** The per-server slots of a cache: the primary slot older adapters read, plus the remaining config variants. */
+export type MetadataCacheSnapshot = Pick<MetadataCache, "servers" | "variants">;
 export type { CachedPrompt, CachedResource, CachedTool, MetadataCache, ServerCacheEntry } from "./types.ts";
 export declare function getMetadataCachePath(): string;
 export declare function loadMetadataCache(): MetadataCache | null;
 export declare function saveMetadataCache(cache: MetadataCache, options?: {
-    startupSnapshot?: MetadataCache["servers"];
+    startupSnapshot?: StartupSnapshot;
 }): void;
+/** The startup snapshot: the per-server slots, or the servers map older callers pass. */
+export type StartupSnapshot = MetadataCacheSnapshot | MetadataCache["servers"];
+/**
+ * Entries cached for one server name: the primary slot first, then its config variants.
+ * The primary slot is kept for older adapters that only know that slot; readers should resolve by hash.
+ */
+export declare function serverCacheEntries(cache: MetadataCacheSnapshot | null | undefined, serverName: string): ServerCacheEntry[];
+/** The entry cached for this exact config hash, without any validity check. */
+export declare function findServerCacheEntry(cache: MetadataCacheSnapshot | null | undefined, serverName: string, configHash: string | undefined): ServerCacheEntry | undefined;
+/**
+ * The cached entry for the definition's current config, when it is still usable: same config hash, cached,
+ * not authorization-scoped, not a failure marker, and within the declared TTL.
+ */
+export declare function resolveServerCacheEntry(cache: MetadataCacheSnapshot | null | undefined, serverName: string, definition: ServerEntry, maxAgeMs?: number, environmentOrCwd?: HashEnvironment): ServerCacheEntry | undefined;
+/**
+ * Stores an entry under its own config hash and updates the primary slot to the newest entry, keeping the other
+ * configs' entries as variants and dropping the oldest once a server holds more than `MAX_ENTRIES_PER_SERVER`.
+ * Mutates `cache`.
+ */
+export declare function setServerCacheEntry(cache: MetadataCacheSnapshot, serverName: string, entry: ServerCacheEntry): void;
+/** The config hash, or undefined when the config can't be resolved yet (for example a missing env var in the URL). */
+export declare function tryComputeServerHash(definition: ServerEntry, environmentOrCwd?: HashEnvironment): string | undefined;
 type HashEnvironment = NodeJS.ProcessEnv | string;
 export declare function computeServerHash(definition: ServerEntry, environmentOrCwd?: HashEnvironment): string;
 /**

@@ -30,6 +30,8 @@ vi.mock("../consent-manager.ts", () => ({ ConsentManager: vi.fn(function () { re
 vi.mock("../metadata-cache.ts", () => ({
   computeServerHash: vi.fn(),
   getMetadataCachePath: vi.fn(() => "/tmp/mcp-cache.json"),
+  findServerCacheEntry: vi.fn(() => undefined),
+  tryComputeServerHash: vi.fn(() => "hash"),
   isServerCacheValid: mocks.isServerCacheValid,
   getMissingConfiguredDirectToolServers: mocks.getMissingConfiguredDirectToolServers,
   loadMetadataCache: mocks.loadMetadataCache,

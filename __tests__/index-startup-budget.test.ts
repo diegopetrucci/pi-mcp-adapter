@@ -23,7 +23,10 @@ vi.mock("../config.ts", () => ({
   setPiMcpConfigEnabled: mocks.setPiMcpConfigEnabled,
   discoverConfiguredClaudePluginSkills: mocks.discoverConfiguredClaudePluginSkills,
 }));
-vi.mock("../metadata-cache.ts", () => ({ loadMetadataCache: mocks.loadMetadataCache }));
+vi.mock("../metadata-cache.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../metadata-cache.ts")>()),
+  loadMetadataCache: mocks.loadMetadataCache,
+}));
 vi.mock("../direct-tool-surface.ts", () => ({
   buildProxyDescription: vi.fn(() => "MCP gateway"),
   getLargeDirectToolsAdvisory: vi.fn(() => undefined),

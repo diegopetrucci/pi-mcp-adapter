@@ -1,6 +1,6 @@
 import { isUiToolVisibleToModel } from "./ui-tool-visibility.ts";
 import { resourceNameToToolName } from "./resource-tools.ts";
-import { createCachedToolSelectorCandidateIndex, isServerCacheValid, parseDirectToolSelectors, type MetadataCache } from "./metadata-cache.ts";
+import { createCachedToolSelectorCandidateIndex, parseDirectToolSelectors, resolveServerCacheEntry, type MetadataCache } from "./metadata-cache.ts";
 import {
   formatServerNamespace,
   formatToolName,
@@ -110,9 +110,8 @@ function hasNamespaceProxy(
 }
 
 function resolveValidCache(definition: ServerEntry | undefined, cache: MetadataCache | null, serverName: string, defaultCwd?: string): ServerCacheEntry | undefined {
-  const entry = cache?.servers[serverName];
-  if (!definition || !entry || !isServerCacheValid(entry, definition, undefined, defaultCwd)) return undefined;
-  return entry;
+  if (!definition) return undefined;
+  return resolveServerCacheEntry(cache, serverName, definition, undefined, defaultCwd ?? process.env);
 }
 
 function cachedServers(config: McpConfig, cache: MetadataCache | null, defaultCwd?: string): CachedServer[] {

@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   findAvailableImportConfigs,
@@ -172,3 +172,120 @@ async function writeConfig(filePath: string, config: unknown): Promise<void> {
   await mkdir(join(filePath, ".."), { recursive: true });
   await writeFile(filePath, `${JSON.stringify(config, null, 2)}\n`);
 }
+
+describe("exclusive import narrowing", () => {
+  let root: string;
+  let agentDir: string;
+  let workspace: string;
+  let override: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "pi-mcp-exclusive-imports-"));
+    roots.push(root);
+    agentDir = join(root, "agent");
+    workspace = join(root, "workspace");
+    override = join(root, "mcp-less.json");
+    // Isolate HOME: imports such as `opencode` also read user-level files there.
+    vi.stubEnv("HOME", join(root, "home"));
+    vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
+    vi.stubEnv("PI_PACKAGE_DIR", "");
+    vi.stubEnv("PI_MCP_CONFIG_MODE", "exclusive");
+    vi.resetModules();
+  });
+
+  async function writeGlobalImports(imports: string[]): Promise<void> {
+    await writeConfig(join(agentDir, "mcp-adapter.json"), { imports, mcpServers: {} });
+  }
+
+  it("loads no imported servers when the exclusive config declares imports: []", async () => {
+    await Promise.all([
+      writeGlobalImports(["vscode"]),
+      writeConfig(join(workspace, ".vscode", "mcp.json"), { mcpServers: { imported: { command: "imported" } } }),
+      writeConfig(override, { mcpServers: {}, imports: [] }),
+    ]);
+    const { getMcpDiscoverySummary, loadMcpConfig } = await import("../config.ts");
+
+    // The global adapter config still owns the import when nothing overrides it.
+    expect(loadMcpConfig(undefined, workspace).mcpServers).toEqual({ imported: { command: "imported" } });
+
+    const config = loadMcpConfig(override, workspace);
+    expect(config.mcpServers).toEqual({});
+    expect(config.imports).toBeUndefined();
+    const discovery = getMcpDiscoverySummary(override, workspace);
+    expect(discovery.imports).toEqual([]);
+    expect(discovery.hasAnyConfig).toBe(true);
+  });
+
+  it("keeps only the global kinds an exclusive config lists", async () => {
+    await Promise.all([
+      writeGlobalImports(["vscode", "opencode"]),
+      writeConfig(join(workspace, ".vscode", "mcp.json"), {
+        mcpServers: { from_vscode: { command: "node", args: ["vscode-server"] } },
+      }),
+      writeConfig(join(workspace, "opencode.json"), {
+        mcp: { from_opencode: { type: "local", command: ["node", "opencode-server"] } },
+      }),
+      writeConfig(override, { mcpServers: {}, imports: ["opencode"] }),
+    ]);
+    const { getMcpDiscoverySummary, loadMcpConfig } = await import("../config.ts");
+
+    const config = loadMcpConfig(override, workspace);
+    expect(config.mcpServers).toEqual({ from_opencode: { command: "node", args: ["opencode-server"] } });
+    expect(config.imports).toEqual(["opencode"]);
+    expect(getMcpDiscoverySummary(override, workspace).imports.map(({ kind }) => kind)).toEqual(["opencode"]);
+  });
+
+  it("cannot add a kind the global adapter config does not import", async () => {
+    await Promise.all([
+      writeGlobalImports(["vscode"]),
+      writeConfig(join(workspace, ".vscode", "mcp.json"), {
+        mcpServers: { from_vscode: { command: "node", args: ["vscode-server"] } },
+      }),
+      writeConfig(join(workspace, "opencode.json"), {
+        mcp: { from_opencode: { type: "local", command: ["node", "opencode-server"] } },
+      }),
+      writeConfig(override, { mcpServers: {}, imports: ["opencode"] }),
+    ]);
+    const { getMcpDiscoverySummary, loadMcpConfig } = await import("../config.ts");
+
+    const config = loadMcpConfig(override, workspace);
+    expect(config.mcpServers).toEqual({});
+    expect(config.imports).toBeUndefined();
+    expect(getMcpDiscoverySummary(override, workspace).imports).toEqual([]);
+  });
+
+  it("keeps the global imports when the exclusive config declares none", async () => {
+    await Promise.all([
+      writeGlobalImports(["vscode"]),
+      writeConfig(join(workspace, ".vscode", "mcp.json"), {
+        mcpServers: { from_vscode: { command: "node", args: ["vscode-server"] } },
+      }),
+      writeConfig(override, { mcpServers: { chosen: { command: "node", args: ["chosen"] } } }),
+    ]);
+    const { getMcpDiscoverySummary, loadMcpConfig } = await import("../config.ts");
+
+    const config = loadMcpConfig(override, workspace);
+    expect(config.mcpServers).toEqual({
+      chosen: { command: "node", args: ["chosen"] },
+      from_vscode: { command: "node", args: ["vscode-server"] },
+    });
+    expect(config.imports).toEqual(["vscode"]);
+    expect(getMcpDiscoverySummary(override, workspace).imports.map(({ kind }) => kind)).toEqual(["vscode"]);
+  });
+
+  it("does not narrow imports outside exclusive mode", async () => {
+    vi.stubEnv("PI_MCP_CONFIG_MODE", "merge");
+    await Promise.all([
+      writeGlobalImports(["vscode"]),
+      writeConfig(join(workspace, ".vscode", "mcp.json"), {
+        mcpServers: { from_vscode: { command: "node", args: ["vscode-server"] } },
+      }),
+      writeConfig(override, { mcpServers: {}, imports: [] }),
+    ]);
+    const { loadMcpConfig } = await import("../config.ts");
+
+    const config = loadMcpConfig(override, workspace);
+    expect(config.mcpServers).toEqual({ from_vscode: { command: "node", args: ["vscode-server"] } });
+    expect(config.imports).toEqual(["vscode"]);
+  });
+});

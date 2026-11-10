@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initializeMcp } from "../init.ts";
 import { resolveDirectTools } from "../direct-tool-surface.ts";
-import { computeServerHash, getMetadataCachePath, loadMetadataCache, saveMetadataCache } from "../metadata-cache.ts";
+import { computeServerHash, findServerCacheEntry, getMetadataCachePath, loadMetadataCache, saveMetadataCache } from "../metadata-cache.ts";
 import { createPromptCommand } from "../prompts.ts";
 import { executeCall, executeConnect, executeDescribe, executeSearch } from "../proxy-modes.ts";
 import { createMcpRuntimeOwner } from "../runtime-owner.ts";
@@ -113,18 +113,21 @@ describe("startup discovery", () => {
   const previousConfig = catalog({ configHash: "previous" });
   it.each([
     { case: "a: our marker replaces an unchanged expired catalog", disk: expired, snapshot: expired, ours: marker, kept: marker },
-    { case: "b: our marker keeps another config's catalog saved during the pass", disk: nextConfig, snapshot: undefined, ours: marker, kept: nextConfig },
+    // Entries are per config now, so a marker for our config no longer needs to skip the whole server name.
+    { case: "b: our marker keeps another config's catalog saved during the pass", disk: nextConfig, snapshot: undefined, ours: marker, kept: marker, variant: nextConfig },
     { case: "c: our catalog replaces a newer marker", disk: { ...marker, cachedAt: now + 1_000 }, snapshot: undefined, ours: catalog(), kept: catalog() },
     { case: "d: our catalog keeps a newer catalog for the same config", disk: newerCatalog, snapshot: undefined, ours: catalog(), kept: newerCatalog },
     { case: "e: our catalog keeps output shapes saved during the pass", disk: catalog({ cachedAt: now - 1_000, outputShapes: { list: shape } }), snapshot: undefined, ours: catalog(), kept: catalog({ outputShapes: { list: shape } }) },
     { case: "f: our marker is written when there is no entry", disk: undefined, snapshot: undefined, ours: marker, kept: marker },
     { case: "g: our catalog replaces another config's catalog", disk: previousConfig, snapshot: undefined, ours: catalog(), kept: catalog() },
-  ])("startup batch write, $case", ({ disk, snapshot, ours, kept }) => {
+  ])("startup batch write, $case", ({ disk, snapshot, ours, kept, variant }) => {
     if (disk) saveMetadataCache({ version: 1, servers: { srv: disk } });
 
     saveMetadataCache({ version: 1, servers: { srv: ours } }, { startupSnapshot: snapshot ? { srv: snapshot } : {} });
 
-    expect(loadMetadataCache()!.servers.srv).toEqual(kept);
+    const cache = loadMetadataCache()!;
+    expect(cache.servers.srv).toEqual(kept);
+    if (variant) expect(findServerCacheEntry(cache, "srv", variant.configHash)).toEqual(variant);
   });
 
   it("discovers only servers whose saved metadata is missing, stale, or past its declared TTL", async () => {

@@ -333,20 +333,53 @@ export function findAvailableImportConfigs(cwd = process.cwd()): DiscoveredImpor
   return discovered;
 }
 
-function readSourceForUse(source: ConfigSourceSpec, cwd: string, base: McpConfig): (McpConfig & { ignoredSettings?: Map<string, string[]> }) | null {
+/**
+ * TLH fork: in exclusive mode the Pi global adapter config owns `imports`, so an
+ * explicit config cannot add host imports. An explicit `imports` array may only
+ * narrow that list: the effective kinds are the intersection of the global list
+ * and the explicit one, so `"imports": []` loads no imported servers. An explicit
+ * file without `imports` keeps the global list, and `undefined` here means the
+ * global config is not overridden at all.
+ */
+function getExclusiveImportKinds(sourceSpecs: ConfigSourceSpec[], cwd = process.cwd()): ImportKind[] | undefined {
+  if (!isExclusiveConfigMode()) return undefined;
+  const overlay = sourceSpecs.find((source) => source.id === "pi-adapter-overlay");
+  if (!overlay) return undefined;
+  const globalImports = readValidatedConfig(overlay.readPath, "MCP exclusive config")?.imports ?? [];
+  const explicitPath = sourceSpecs.find((source) => source.id === "explicit-read-only")?.readPath;
+  const declared = explicitPath === undefined
+    ? undefined
+    : readValidatedConfig(explicitPath, "MCP exclusive explicit config")?.imports;
+  if (declared === undefined) return globalImports;
+  return globalImports.filter((kind) => declared.includes(kind));
+}
+
+function readSourceForUse(
+  source: ConfigSourceSpec,
+  cwd: string,
+  base: McpConfig,
+  exclusiveImports?: ImportKind[],
+): (McpConfig & { ignoredSettings?: Map<string, string[]> }) | null {
   const raw = readSourceConfig(source.id, source.readPath, cwd, source.nativePi);
   if (!raw) return null;
-  if (source.projection === "adapter") return projectAdapterOverlay(raw, base, cwd);
-  if (!isReadOnlyImportedPath(source.readPath, cwd)) return raw;
-  const stripped: McpConfig & { ignoredSettings?: Map<string, string[]> } = { mcpServers: raw.mcpServers };
-  if (raw.ignoredSettings) stripped.ignoredSettings = raw.ignoredSettings;
+  const isExclusiveOverrideSource = source.id === "explicit-read-only" || source.id === "pi-adapter-overlay";
+  const loaded: McpConfig & { ignoredSettings?: Map<string, string[]> } = { ...raw };
+  if (exclusiveImports !== undefined && isExclusiveOverrideSource) {
+    if (exclusiveImports.length > 0) loaded.imports = exclusiveImports;
+    else delete loaded.imports;
+  }
+  if (source.projection === "adapter") return projectAdapterOverlay(loaded, base, cwd);
+  if (!isReadOnlyImportedPath(source.readPath, cwd)) return loaded;
+  const stripped: McpConfig & { ignoredSettings?: Map<string, string[]> } = { mcpServers: loaded.mcpServers };
+  if (loaded.ignoredSettings) stripped.ignoredSettings = loaded.ignoredSettings;
   return stripped;
 }
 
 function getConfigSourceSummaries(sourceSpecs: ConfigSourceSpec[], cwd = process.cwd()): ConfigDiscoverySource[] {
   let effectiveConfig: McpConfig = { mcpServers: {} };
+  const exclusiveImports = getExclusiveImportKinds(sourceSpecs, cwd);
   return sourceSpecs.map((source) => {
-    const loaded = readSourceForUse(source, cwd, effectiveConfig);
+    const loaded = readSourceForUse(source, cwd, effectiveConfig, exclusiveImports);
     if (loaded && source.active !== false) effectiveConfig = mergeConfigs(effectiveConfig, expandImports(loaded, cwd).config);
     return {
       id: source.id,
@@ -385,7 +418,8 @@ export function getMcpDiscoverySummary(
   const importKinds = isExclusiveConfigMode()
     // TLH fork: in exclusive mode, always read imports from the Pi global adapter
     // config, not from an explicit override path (which is user/tool content).
-    ? (readValidatedConfig(getPiGlobalConfigPath(), "MCP exclusive config")?.imports ?? [])
+    // An explicit `imports` array can only narrow that list.
+    ? (getExclusiveImportKinds(sourceSpecs, cwd) ?? readValidatedConfig(getPiGlobalConfigPath(), "MCP exclusive config")?.imports ?? [])
     : (Object.keys(IMPORT_PATHS) as ImportKind[]);
   const imports = includeHostConfigs
     ? importKinds
@@ -514,9 +548,10 @@ export function loadMcpConfigWithSources(overridePath?: string, cwd = process.cw
 
   const piProjectSource = sourceSpecs.find((source) => source.id === "pi-mcp-project");
   const piProjectNames = Object.keys((piProjectSource && readPiMcpConfig(piProjectSource.readPath))?.mcpServers ?? {});
+  const exclusiveImports = getExclusiveImportKinds(sourceSpecs, cwd);
   for (const source of sourceSpecs) {
     if (source.active === false) continue;
-    const loaded = readSourceForUse(source, cwd, config);
+    const loaded = readSourceForUse(source, cwd, config, exclusiveImports);
     if (!loaded) continue;
     // Pi replaces a global entry that the project file redefines; mergeServerMaps would merge fields.
     if (source.id === "pi-mcp-global") {
@@ -650,9 +685,10 @@ function getConfiguredHostConfigDiscovery(overridePath?: string, cwd = process.c
 function getConfiguredImportKinds(sourceSpecs: ConfigSourceSpec[], cwd: string): ImportKind[] {
   const importKinds: ImportKind[] = [];
   let effectiveConfig: McpConfig = { mcpServers: {} };
+  const exclusiveImports = getExclusiveImportKinds(sourceSpecs, cwd);
   for (const source of sourceSpecs) {
     if (source.active === false || isReadOnlyImportedPath(source.readPath, cwd)) continue;
-    const loaded = readSourceForUse(source, cwd, effectiveConfig);
+    const loaded = readSourceForUse(source, cwd, effectiveConfig, exclusiveImports);
     if (!loaded) continue;
     for (const importKind of loaded.imports ?? []) {
       if (!importKinds.includes(importKind)) importKinds.push(importKind);
@@ -710,9 +746,10 @@ function getConfigConflicts(
   }
   const hostDiscoveryOn = !isExclusiveConfigMode() && getConfiguredHostConfigDiscovery(overridePath, cwd) === "on";
   let effectiveConfig: McpConfig = hostDiscoveryOn ? loadDiscoveredHostConfigs(cwd).config : { mcpServers: {} };
+  const exclusiveImports = getExclusiveImportKinds(sourceSpecs, cwd);
   for (const source of sourceSpecs) {
     if (source.active === false) continue;
-    const loaded = readSourceForUse(source, cwd, effectiveConfig);
+    const loaded = readSourceForUse(source, cwd, effectiveConfig, exclusiveImports);
     if (!loaded) continue;
     if (loaded.imports?.length) {
       for (const importKind of loaded.imports) {
@@ -2109,9 +2146,11 @@ export function writeProjectServerDisabledOverride(
   } else {
     next = Object.fromEntries(Object.entries(existing ?? {}).filter(([key]) => key !== "disabled"));
     let lowerConfig: McpConfig = { mcpServers: {} };
-    for (const source of getConfigSources(overridePath, cwd)) {
+    const sourceSpecs = getConfigSources(overridePath, cwd);
+    const exclusiveImports = getExclusiveImportKinds(sourceSpecs, cwd);
+    for (const source of sourceSpecs) {
       if (sameConfigIdentity(source.readPath, filePath) || source.active === false) continue;
-      const loaded = readSourceForUse(source, cwd, lowerConfig);
+      const loaded = readSourceForUse(source, cwd, lowerConfig, exclusiveImports);
       if (loaded) lowerConfig = mergeConfigs(lowerConfig, expandImports(loaded, cwd).config);
     }
     if (raw.imports !== undefined) {
@@ -2411,9 +2450,11 @@ export function getServerProvenance(overridePath?: string, cwd = process.cwd()):
   let effectiveConfig: McpConfig = hostDiscoveryOn
     ? loadDiscoveredHostConfigs(cwd).config
     : { mcpServers: {} };
-  for (const source of getConfigSources(overridePath, cwd)) {
+  const sourceSpecs = getConfigSources(overridePath, cwd);
+  const exclusiveImports = getExclusiveImportKinds(sourceSpecs, cwd);
+  for (const source of sourceSpecs) {
     if (source.active === false) continue;
-    const loaded = readSourceForUse(source, cwd, effectiveConfig);
+    const loaded = readSourceForUse(source, cwd, effectiveConfig, exclusiveImports);
     if (!loaded) continue;
     const adapterPath = getAdapterWritePath(source, cwd);
     if (loaded.imports?.length) {

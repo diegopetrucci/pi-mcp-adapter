@@ -6,7 +6,7 @@ import { Type } from "typebox";
 import { cloneMcpConfig, discoverConfiguredClaudePluginSkills, getLegacyMcpMigrationNotices, getPiMcpAuthPath, loadMcpConfig, resolveConfiguredClaudePluginMcp, setPiMcpConfigEnabled, translatePiMcpServer } from "./config.ts";
 import { abortable, throwIfAborted } from "./abort.ts";
 import { toolErrorOverride } from "./error-signal.ts";
-import { computeServerHash, isServerCacheValid, loadMetadataCache, type MetadataCache } from "./metadata-cache.ts";
+import { computeServerHash, findServerCacheEntry, isServerCacheValid, loadMetadataCache, resolveServerCacheEntry, setServerCacheEntry, tryComputeServerHash, type MetadataCache } from "./metadata-cache.ts";
 import type { McpExtensionState } from "./state.ts";
 import {
   createPromptCommand,
@@ -142,8 +142,7 @@ function hasEnabledServerWithoutValidMetadata(
 ): boolean {
   return Object.entries(config.mcpServers).some(([serverName, definition]) => {
     if (isServerDisabled(definition) || directSpecs.some(spec => spec.serverName === serverName)) return false;
-    const entry = cache?.servers?.[serverName];
-    return entry === undefined || !isServerCacheValid(entry, definition, 0, defaultCwd);
+    return resolveServerCacheEntry(cache, serverName, definition, 0, defaultCwd ?? process.env) === undefined;
   });
 }
 
@@ -347,9 +346,19 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions = {}) {
     });
   }
 
-  function deferredToolFields(spec: typeof directSpecs[number], config: McpConfig, cache: ReturnType<typeof loadMetadataCache>): Record<string, unknown> | undefined {
+  function deferredToolFields(
+    spec: typeof directSpecs[number],
+    config: McpConfig,
+    cache: ReturnType<typeof loadMetadataCache>,
+    defaultCwd?: string,
+  ): Record<string, unknown> | undefined {
     if (!deferSearchTools || !spec.lazy) return undefined;
-    const serverCache = cache?.servers?.[spec.serverName];
+    const definition = config.mcpServers[spec.serverName];
+    // The spec's own config wins; the plain slot stays a fallback for cache files whose entry it cannot match, since
+    // these deferred fields only decorate a declaration that already resolved.
+    const serverCache = definition
+      ? resolveServerCacheEntry(cache, spec.serverName, definition, 0, defaultCwd ?? process.env) ?? cache?.servers?.[spec.serverName]
+      : cache?.servers?.[spec.serverName];
     const tool = spec.resourceUri ? undefined : serverCache?.tools?.find(candidate => candidate.name === spec.originalName);
     const description = config.mcpServers[spec.serverName]?.description?.trim();
     const instructions = serverCache?.instructions;
@@ -582,11 +591,11 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions = {}) {
   ): MetadataCache["servers"] {
     const captured: MetadataCache["servers"] = {};
     if (!cache) return captured;
-    for (const [serverName, entry] of Object.entries(cache.servers)) {
-      const definition = config.mcpServers[serverName];
-      if (!definition || isServerDisabled(definition)) continue;
+    for (const [serverName, definition] of Object.entries(config.mcpServers)) {
+      if (isServerDisabled(definition)) continue;
       try {
-        if (!isServerCacheValid(entry, definition, 0, defaultCwd)) continue;
+        const entry = resolveServerCacheEntry(cache, serverName, definition, 0, defaultCwd ?? process.env);
+        if (!entry) continue;
         captured[serverName] = structuredClone(entry);
       } catch {
         // Invalid or non-cloneable cache entries cannot represent an applied
@@ -603,15 +612,14 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions = {}) {
     serverNames?: ReadonlySet<string>,
     capturedCatalogs?: MetadataCache["servers"],
   ): void {
-    const source = capturedCatalogs ?? cache?.servers;
-    if (!source) return;
-    for (const [serverName, entry] of Object.entries(source)) {
+    for (const [serverName, definition] of Object.entries(config.mcpServers)) {
       if (serverNames && !serverNames.has(serverName)) continue;
-      const definition = config.mcpServers[serverName];
-      if (!definition || isServerDisabled(definition)) continue;
-      if (capturedCatalogs
-        ? !isAppliedDirectToolCatalogValid(entry, definition, defaultCwd)
-        : !isServerCacheValid(entry, definition, 0, defaultCwd)) continue;
+      if (isServerDisabled(definition)) continue;
+      const entry = capturedCatalogs
+        ? capturedCatalogs[serverName]
+        : resolveServerCacheEntry(cache, serverName, definition, 0, defaultCwd ?? process.env);
+      if (!entry) continue;
+      if (capturedCatalogs && !isAppliedDirectToolCatalogValid(entry, definition, defaultCwd)) continue;
       // TTL and private-scope markers govern acquisition from shared disk, not
       // the lifetime of this ephemeral catalog that already produced the
       // applied declaration. Strip them so the resolver cannot expire the
@@ -651,10 +659,9 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions = {}) {
     for (const serverName of serverNames) {
       if (!isEffectiveSearchDirectToolServer(config, serverName)) continue;
       const definition = config.mcpServers[serverName];
-      const entry = cache?.servers?.[serverName];
-      if (!definition || !entry) continue;
+      if (!definition) continue;
       try {
-        if (isServerCacheValid(entry, definition, 0, defaultCwd)) captured.add(serverName);
+        if (resolveServerCacheEntry(cache, serverName, definition, 0, defaultCwd)) captured.add(serverName);
       } catch {
         // A malformed or otherwise untrusted entry cannot consume discovery.
       }
@@ -700,10 +707,8 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions = {}) {
     for (const [serverName, definition] of Object.entries(config.mcpServers)) {
       if ((serverNames && !serverNames.has(serverName))
         || !isEffectiveSearchDirectToolServer(config, serverName)) continue;
-      const entry = cache?.servers?.[serverName];
-      if (!entry) continue;
       try {
-        if (isServerCacheValid(entry, definition, 0, defaultCwd)) {
+        if (resolveServerCacheEntry(cache, serverName, definition, 0, defaultCwd)) {
           appliedSearchDirectToolServers.add(serverName);
         }
       } catch {
@@ -778,7 +783,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions = {}) {
       for (const [serverName, definition] of Object.entries(config.mcpServers)) {
         if (affectedServers.has(serverName)) {
           scopedConfig.mcpServers[serverName] = definition;
-          const currentEntry = cache?.servers?.[serverName];
+          const currentEntry = findServerCacheEntry(cache, serverName, tryComputeServerHash(definition, defaultCwd ?? process.env));
           if (currentEntry) scopedServers[serverName] = currentEntry;
           continue;
         }
@@ -825,7 +830,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions = {}) {
     const updated: string[] = [];
     const restored: string[] = [];
     for (const spec of specs) {
-      const deferred = deferredToolFields(spec, config, cache);
+      const deferred = deferredToolFields(spec, config, cache, defaultCwd);
       const fingerprint = directToolFingerprint(spec, deferred);
       const previous = registeredDirectTools.get(spec.prefixedName);
       const changed = !previous || previous.fingerprint !== fingerprint || !existingNames.has(spec.prefixedName);
@@ -922,7 +927,11 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions = {}) {
   function loadToolSurfaceCache(config: McpConfig, state?: McpExtensionState): MetadataCache | null {
     const cache = loadMetadataCache();
     if (!state?.sessionMetadata?.size) return cache;
-    const servers = { ...(cache?.servers ?? {}) };
+    const surface: MetadataCache = {
+      version: cache?.version ?? 1,
+      servers: { ...(cache?.servers ?? {}) },
+      ...(cache?.variants ? { variants: { ...cache.variants } } : {}),
+    };
     for (const [serverName, entry] of state.sessionMetadata) {
       const definition = config.mcpServers[serverName];
       if (!definition || isServerDisabled(definition)) continue;
@@ -932,9 +941,9 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions = {}) {
         continue;
       }
       const { ttlMs: _ttlMs, cacheScope: _cacheScope, ...sessionEntry } = entry;
-      servers[serverName] = { ...sessionEntry, cachedAt: Date.now() };
+      setServerCacheEntry(surface, serverName, { ...sessionEntry, cachedAt: Date.now() });
     }
-    return { version: 1, servers };
+    return surface;
   }
 
   // Mirror init's lifecycle registration for servers supplied by another
@@ -2086,7 +2095,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions = {}) {
   }
 
   for (const spec of directSpecs) {
-    const deferred = deferredToolFields(spec, earlyConfig, earlyCache);
+    const deferred = deferredToolFields(spec, earlyConfig, earlyCache, process.cwd());
     registerDirectTool(spec, deferred, earlyConfig);
     registeredDirectTools.set(spec.prefixedName, { spec, fingerprint: directToolFingerprint(spec, deferred) });
     if (spec.lazy) lazyDirectTools.add(spec.prefixedName);

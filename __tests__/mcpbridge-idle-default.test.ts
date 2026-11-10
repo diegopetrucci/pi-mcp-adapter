@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { initializeMcp } from "../init.ts";
+import { initializeMcp, lazyConnect } from "../init.ts";
 import { computeServerHash } from "../metadata-cache.ts";
 import { createMcpRuntimeOwner } from "../runtime-owner.ts";
 import type { ServerEntry } from "../types.ts";
@@ -61,7 +61,7 @@ describe("mcpbridge idle default in initializeMcp", () => {
   const idleMs = (state: Awaited<ReturnType<typeof start>>, name: string) =>
     (state.lifecycle as any).getIdleTimeout(name);
 
-  it.skipIf(process.platform === "win32")("keeps lazy mcpbridge servers resident through discovery and exempt from idle shutdown", async () => {
+  it.skipIf(process.platform === "win32")("keeps lazy mcpbridge servers resident after first use and exempt from idle shutdown", async () => {
     const xcrun = script("xcrun", `shift\nexec "${process.execPath}" "${fixture}" xcrun`);
     const bare = script("mcpbridge", `exec "${process.execPath}" "${fixture}" bare`);
     const definitions: Record<string, ServerEntry> = {
@@ -75,6 +75,13 @@ describe("mcpbridge idle default in initializeMcp", () => {
 
     const state = await start(definitions, { idleTimeout: 7 });
     try {
+      // Bridge servers are not probed at startup (see mcpbridge-first-use.test.ts); they connect on first use.
+      const connectedAtStartup = [...state.manager.getAllConnections()].map(([name]) => name).sort();
+      expect(connectedAtStartup).not.toContain("viaxcrun");
+      expect(connectedAtStartup).not.toContain("bare");
+      expect(connectedAtStartup).not.toContain("plain");
+      expect(await lazyConnect(state, "viaxcrun")).toBe(true);
+      expect(await lazyConnect(state, "bare")).toBe(true);
       const connected = [...state.manager.getAllConnections()].map(([name]) => name).sort();
       expect(connected).toContain("viaxcrun");
       expect(connected).toContain("bare");
